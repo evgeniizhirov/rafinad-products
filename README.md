@@ -72,7 +72,7 @@ npm run dev                                                   # → http://local
 ### Проверки
 
 ```bash
-npm test            # 59 автотестов: права, публичный API, рейтинг, импорт, дубли, циклы, лимиты, планировщик
+npm test            # 69 автотестов: права, публичный API, рейтинг, импорт (в т.ч. TaskFlow), дубли, циклы, лимиты, планировщик
 npm run typecheck   # TypeScript для worker, tests, scripts
 npm run build       # сборка клиента
 ```
