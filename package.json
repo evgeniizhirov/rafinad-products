@@ -9,14 +9,16 @@
     "build:client": "node scripts/build-client.mjs",
     "dev": "npm run build && wrangler dev",
     "dev:node": "node scripts/build-client.mjs && tsx scripts/dev-server.ts",
-    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "deploy": "node scripts/build-client.mjs && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "db:seed:local": "tsx scripts/gen-seed.ts && wrangler d1 execute DB --local --file seed/seed.sql",
     "db:seed:remote": "tsx scripts/gen-seed.ts && wrangler d1 execute DB --remote --file seed/seed.sql",
     "create-admin": "tsx scripts/create-admin.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "postinstall": "node scripts/build-client.mjs",
+    "deploy:with-migrations": "wrangler d1 migrations apply DB --remote && npm run deploy"
   },
   "dependencies": {
     "react": "19.2.8",

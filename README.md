@@ -90,13 +90,16 @@ npx wrangler d1 execute DB --remote --file .local/admin.sql
 
 ## Деплой
 
-Рекомендуется Workers Builds — сборка и деплой при каждом push в `main`:
+Workers Builds собирает и деплоит Worker при каждом push в `main`.
 
-1. Cloudflare Dashboard → **Workers & Pages → products-roadmap → Settings → Builds → Connect**, выбрать репозиторий `rafinad-products`, ветка `main`.
-2. **Build command** оставить пустой: клиент собирается шагом `build.command` из `wrangler.jsonc`.
-3. **Deploy command:** `npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`. Миграции применяются перед каждым деплоем; уже применённые пропускаются.
+1. Cloudflare Dashboard → **Workers & Pages → products-roadmap → Settings → Builds → Connect**, репозиторий `rafinad-products`, ветка `main`.
+2. **Build command** — пусто, **Deploy command** — `npm run deploy` (подойдёт и `npx wrangler deploy` по умолчанию).
 
-Вручную: `npx wrangler login && npm run deploy`.
+Клиент собирается сам: на шаге `npm install` (`postinstall`) и ещё раз внутри `npm run deploy`. Настройку `build.command` из `wrangler.jsonc` Workers Builds не выполняет, поэтому на неё не полагаемся.
+
+**Миграции D1 в сборке не запускаются.** Токен, который Workers Builds создаёт по умолчанию, не имеет прав на D1. Новые миграции применяйте отдельно: `npm run db:migrate:remote` (локально, после `npx wrangler login`). Другой вариант — выдать токену сборки право **D1: Edit** и указать Deploy command `npm run deploy:with-migrations`.
+
+Вручную, без Workers Builds: `npx wrangler login && npm run deploy`.
 
 ## Google Sheets: read-only доступ
 
