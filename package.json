@@ -1,0 +1,40 @@
+{
+  "name": "rafinad-product-roadmap",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rafinad Product Roadmap — backlog, department priorities, capacity planning and releases (Cloudflare Workers + D1)",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "build:client": "node scripts/build-client.mjs",
+    "dev": "npm run build && wrangler dev",
+    "dev:node": "node scripts/build-client.mjs && tsx scripts/dev-server.ts",
+    "deploy": "node scripts/build-client.mjs && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "db:seed:local": "tsx scripts/gen-seed.ts && wrangler d1 execute DB --local --file seed/seed.sql",
+    "db:seed:remote": "tsx scripts/gen-seed.ts && wrangler d1 execute DB --remote --file seed/seed.sql",
+    "create-admin": "tsx scripts/create-admin.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "postinstall": "node scripts/build-client.mjs",
+    "deploy:with-migrations": "wrangler d1 migrations apply DB --remote && npm run deploy"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "wrangler": "^4.20.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
