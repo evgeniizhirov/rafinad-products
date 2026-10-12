@@ -186,9 +186,11 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
   const withEst = showEstimates(viewer, w);
   const estimates: Record<string, number> = {};
   const manual: Record<string, boolean> = {};
+  const estVersions: Record<string, number> = {};
   for (const e of estRows) {
     estimates[e.team_id] = e.hours;
     manual[e.team_id] = bool(e.is_manual);
+    estVersions[e.team_id] = e.version;
   }
   const total = Object.values(estimates).reduce((s, h) => s + h, 0);
   const dto: Record<string, unknown> = {
@@ -233,6 +235,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     dto.version = f.version;
     dto.updated_at = f.updated_at;
     dto.estimate_manual = manual;
+    dto.estimate_versions = estVersions;
   }
   if (viewer === 'editor') dto.private_notes = opts.detail ? f.private_notes : undefined;
 

@@ -417,7 +417,7 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
 
 function entityLabel(type: string, e: SnapshotEntity) {
   const prefix = type === 'feature' ? `RF-${e.number}` : type === 'epic' ? `EP-${e.number}` : e.external_ref || 'Оффер';
-  return `${prefix} · ${e.title}`;
+  return `${prefix}: ${e.title}`;
 }
 
 /** existing epic for an external id: link of this source first, then the epic's business ID */
@@ -484,7 +484,7 @@ function diffEntity(
   const local = localValues(type, target, L);
   const source = sourceValues(type, payload);
   const out: DiffEntry[] = [];
-  const label = (field: string) => (field.startsWith('hours:') ? `Часы · ${teamName.get(field.slice(6)) ?? field.slice(6)}` : FIELD_LABELS[field] ?? field);
+  const label = (field: string) => (field.startsWith('hours:') ? `Часы ${teamName.get(field.slice(6)) ?? field.slice(6)}` : FIELD_LABELS[field] ?? field);
   const display = (field: string, v: unknown): string | undefined => {
     if (v === null || v === undefined || v === '') return '—';
     if (field === 'category_id') return L.categoryName.get(String(v)) ?? String(v);
@@ -494,7 +494,7 @@ function diffEntity(
       const s = String(v);
       if (s.startsWith('id:')) return L.entities.epic.get(s.slice(3))?.title ?? s;
       const e = resolveEpicExt(L, s);
-      return e ? `${s} · ${e.title}` : s;
+      return e ? `${s}: ${e.title}` : s;
     }
     return undefined;
   };

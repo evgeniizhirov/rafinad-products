@@ -1,0 +1,7 @@
+from_type,from_external_id,relation_type,to_type,to_external_id
+feature,GS-101,blocks,feature,GS-102
+feature,GS-103,blocks,feature,GS-101
+feature,GS-104,affects_offer,offer,OF-3011
+feature,GS-105,affects_offer,offer,OF-2051
+feature,GS-107,related_to,feature,GS-104
+feature,GS-105,belongs_to_epic,epic,GS-EP-11

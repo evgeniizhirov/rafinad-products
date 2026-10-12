@@ -135,7 +135,7 @@ export function registerPlanningRoutes(r: Router) {
       cur
         ? stmt(db, 'UPDATE team_capacities SET hours = ?, updated_at = ?, updated_by = ?, version = version + 1 WHERE period_id = ? AND team_id = ?', b.hours, now, user.id, b.period_id, b.team_id)
         : stmt(db, 'INSERT INTO team_capacities (period_id, team_id, hours, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)', b.period_id, b.team_id, b.hours, now, user.id),
-      auditStmt(db, user, 'capacity', `${b.period_id}:${b.team_id}`, 'capacity_changed', [{ field: `${period.name} · ${team.name}`, old: cur?.hours ?? null, new: b.hours }]),
+      auditStmt(db, user, 'capacity', `${b.period_id}:${b.team_id}`, 'capacity_changed', [{ field: `${team.name}, ${period.name}`, old: cur?.hours ?? null, new: b.hours }]),
       planAlertIfStmt(db, 'capacity_changed', `Изменена ёмкость «${team.name}» в периоде «${period.name}» (${cur?.hours ?? 0} → ${b.hours} ч) — проверьте утверждённый план`, 'period', period.id, LOCKED_IN_PERIOD_SQL, period.id),
     ], 'Ёмкость уже изменил другой пользователь. Обновите данные.');
     return json({ ok: true });
