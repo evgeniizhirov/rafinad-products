@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { FeatureForm, FeaturePicker, KIND_LABEL, usePlacement, VoteControl } from '../features';
-import { fmtDate, fmtDateTime, fmtH, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
-import { Cubes, Empty, ErrorBox, Loading, Modal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
+import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
+import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
 
 type Tab = 'about' | 'priority' | 'resources' | 'links' | 'history';
 
@@ -97,8 +97,13 @@ function About({ f }: { f: any }) {
         {f.tags.length > 0 && (<><dt>Теги</dt><dd className="row wrap">{f.tags.map((t: string) => <span key={t} className="tag">{t}</span>)}</dd></>)}
         <dt>Плановый период</dt>
         <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
-        <dt>Релиз</dt>
-        <dd>{f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}</dd>
+        <dt>Релиз → спринт</dt>
+        <dd>
+          {f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}
+          {f.sprint && <> → спринт <b>{f.sprint.code}</b> <span className="muted small">({fmtDate(f.sprint.start_date, false)} — {fmtDate(f.sprint.end_date)}){f.task_kind !== 'planned' ? ', справочно' : ''}</span></>}
+          {f.is_focus && <span className="pill beet" style={{ marginLeft: 6 }}>фокус релиза</span>}
+        </dd>
+        {f.task_kind === 'planned' && (<><dt>Плановая выкладка</dt><dd>{f.planned_production_date ? fmtDate(f.planned_production_date) : <span className="muted">—</span>}{f.baseline_production_date && f.baseline_production_date !== f.planned_production_date && <span className="muted small"> (обещали {fmtDate(f.baseline_production_date)})</span>}</dd></>)}
         <dt>Тип работы</dt>
         <dd>{KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}</dd>
         {f.initiator !== undefined && (
@@ -249,6 +254,7 @@ function Resources({ f }: { f: any }) {
           <span className="small muted">Пустое поле — «не оценено», а не ноль. Ноль — команда не нужна.</span>
         </div>
       )}
+      <ScheduleSection f={f} canEdit={canEdit} />
       <section className="stack">
         <h3 style={{ fontSize: 15 }}>Плановый период</h3>
         {canPlan ? (
@@ -270,6 +276,70 @@ function Resources({ f }: { f: any }) {
       </section>
       {modal}
     </div>
+  );
+}
+
+/** Release → sprint → planned production date (FR-06). Bugs keep a sprint only as a reference. */
+function ScheduleSection({ f, canEdit }: { f: any; canEdit: boolean }) {
+  const releases = useApi<any>(canEdit ? '/releases' : null);
+  const sprintsQ = useApi<any>(canEdit ? '/sprints' : null);
+  const planned = f.task_kind === 'planned';
+  const [v, setV] = useState({ release_id: f.release?.id ?? '', sprint_id: f.sprint?.id ?? '', date: '' });
+  const [pending, setPending] = useState<any | null>(null);
+  useEffect(() => {
+    setV({ release_id: f.release?.id ?? '', sprint_id: f.sprint?.id ?? '', date: '' });
+  }, [f.id, f.version]);
+  if (!canEdit || f.is_product_internal) return null;
+  const sprints = (sprintsQ.data?.sprints ?? []).filter((s: any) => s.status !== 'closed' || s.id === f.sprint?.id);
+  const ofRelease = planned && v.release_id ? sprints.filter((s: any) => s.release_id === v.release_id) : sprints;
+  const sprint = sprints.find((s: any) => s.id === v.sprint_id);
+  const send = async (extra: Record<string, unknown> = {}) => {
+    const body: Record<string, unknown> = { sprint_id: v.sprint_id || null, version: f.version, ...extra };
+    if (planned) body.release_id = v.release_id || null;
+    if (planned && v.date) body.planned_production_date = v.date;
+    try {
+      await api(`/features/${f.id}/schedule`, { method: 'PATCH', body });
+      invalidate();
+      toast('План задачи обновлён');
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'approved') setPending(body);
+      else { toast((e as Error).message, 'error'); invalidate(); }
+    }
+  };
+  const changed = v.release_id !== (f.release?.id ?? '') || v.sprint_id !== (f.sprint?.id ?? '') || !!v.date;
+  return (
+    <section className="stack">
+      <h3 style={{ fontSize: 15 }}>{planned ? 'Релиз, спринт и выкладка' : 'Спринт (справочно)'}</h3>
+      {!planned && <p className="small muted">Баги и оперативные доработки не входят в план спринта и релиза — спринт указывает, в ходе какого спринта идёт исправление.</p>}
+      <div className="row wrap">
+        {planned && (
+          <select className="select" style={{ maxWidth: 220 }} value={v.release_id} onChange={(e) => setV({ release_id: e.target.value, sprint_id: '', date: '' })} aria-label="Релиз">
+            <option value="">Без релиза</option>
+            {(releases.data?.releases ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+        <select className="select" style={{ maxWidth: 260 }} value={v.sprint_id} onChange={(e) => {
+          const s = sprints.find((x: any) => x.id === e.target.value);
+          setV((x) => ({ ...x, sprint_id: e.target.value, release_id: planned && s ? s.release_id : x.release_id }));
+        }} aria-label="Спринт">
+          <option value="">Без спринта</option>
+          {ofRelease.map((s: any) => <option key={s.id} value={s.id}>Спринт {s.code} · {fmtDate(s.start_date, false)} — {fmtDate(s.end_date)}</option>)}
+        </select>
+        {planned && (
+          <label className="row small" title="Пусто — срок выкладки спринта">
+            выкладка
+            <input type="date" className="input sm" value={v.date} placeholder={sprint?.production_due ?? ''} onChange={(e) => setV((x) => ({ ...x, date: e.target.value }))} />
+          </label>
+        )}
+        <button className="btn primary sm" disabled={!changed} onClick={() => send()}>Сохранить</button>
+      </div>
+      {planned && sprint && <div className="small muted">Разработка {fmtDate(sprint.start_date, false)} — {fmtDate(sprint.end_date)}, тестирование с {fmtDate(sprint.testing_start)}, выкладка до {fmtDate(sprint.production_due)}.</div>}
+      {pending && (
+        <ReasonModal title="Релиз утверждён" confirmText="Изменить состав" onClose={() => setPending(null)} onConfirm={async (reason) => { const p = pending; setPending(null); await send({ ...p, confirm_approved_change: true, reason }); }}>
+          <p>Задача меняет состав утверждённого релиза. Укажите причину — она попадёт в журнал.</p>
+        </ReasonModal>
+      )}
+    </section>
   );
 }
 

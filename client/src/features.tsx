@@ -178,6 +178,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     private_notes: feature?.private_notes ?? '',
     task_kind: feature?.task_kind ?? 'planned',
     is_product_internal: !!feature?.is_product_internal,
+    is_focus: !!feature?.is_focus,
     initiator_type: feature?.initiator?.type ?? '',
     initiator_name: feature?.initiator?.type === 'free_text' ? feature.initiator.name : '',
     initiator_user_id: feature?.initiator?.user_id ?? '',
@@ -197,6 +198,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       requested_at: nul(v.requested_at), planned_start: nul(v.planned_start), planned_end: nul(v.planned_end), external_ref: nul(v.external_ref.trim()),
       tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), offer_ids: v.offer_ids, private_notes: nul(v.private_notes),
       task_kind: v.task_kind, is_product_internal: v.is_product_internal,
+      is_focus: v.task_kind === 'planned' && !v.is_product_internal ? v.is_focus : false,
       initiator: v.initiator_type === 'free_text' ? { type: 'free_text', name: v.initiator_name.trim() }
         : v.initiator_type === 'user' ? { type: 'user', user_id: v.initiator_user_id }
         : v.initiator_type === 'department' ? { type: 'department', department_id: v.initiator_department_id }
@@ -255,6 +257,12 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
             <input type="checkbox" checked={v.is_product_internal} onChange={(e) => setV((s) => ({ ...s, is_product_internal: e.target.checked }))} />
             Внутренняя задача продукта
           </label>
+          {v.task_kind === 'planned' && !v.is_product_internal && (
+            <label className="check" title="Обязательство релиза перед бизнесом — показывается в целях спринта независимо от статуса">
+              <input type="checkbox" checked={v.is_focus} onChange={(e) => setV((s) => ({ ...s, is_focus: e.target.checked }))} />
+              Фокусная задача релиза
+            </label>
+          )}
         </Field>
         <Field label="Инициатор" hint="Кто попросил задачу — не автор карточки и не исполнитель">
           <select className="select" value={v.initiator_type} onChange={set('initiator_type')}>

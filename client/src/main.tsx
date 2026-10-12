@@ -11,6 +11,7 @@ import { OfferDetail, Offers } from './pages/Offers';
 import { Overview } from './pages/Overview';
 import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
+import { Calendar } from './pages/Calendar';
 import { Roadmap } from './pages/Roadmap';
 import { Sync } from './pages/Sync';
 import { Avatar, Empty, Loading, Toasts } from './ui';
@@ -32,6 +33,7 @@ const NAV = [
   { to: '/priorities', label: 'Приоритеты', icon: I.priorities },
   { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
+  { to: '/calendar', label: 'Спринты', icon: I.calendar },
 ];
 
 function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNavigate: () => void }) {
@@ -86,6 +88,7 @@ function Routes() {
     case 'priorities': return <Priorities />;
     case 'roadmap': return <Roadmap />;
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;
+    case 'calendar': return <Calendar />;
     case 'sync': return <Sync />;
     case 'admin': return <Admin />;
     case 'account': return <Account />;

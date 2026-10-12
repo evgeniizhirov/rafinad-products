@@ -31,6 +31,8 @@ const featureFields = {
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   offer_ids: z.array(z.string()).max(100).optional(),
   task_kind: z.enum(TASK_KINDS).optional(),
+  /** release commitment to the business (FR-03); only for planned tasks */
+  is_focus: z.boolean().optional(),
   is_product_internal: z.boolean().optional(),
   /** null clears the initiator */
   initiator: z.discriminatedUnion('type', [
@@ -136,6 +138,8 @@ export function registerFeatureRoutes(r: Router) {
     filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
     filt('stage', (f, v) => f.stage_id === v);
     filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
+    filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
+    if (p.get('focus') === '1') rows = rows.filter((f) => bool(f.is_focus));
     if (viewer !== 'guest') filt('initiator', (f, v) => matchesInitiator(f, w, v));
     if (viewer !== 'guest') filt('visibility', (f, v) => f.visibility === v);
     if (q) {
@@ -205,6 +209,7 @@ export function registerFeatureRoutes(r: Router) {
     const initiator = (await initiatorColumns(ctx, b.initiator)) ?? { initiator_type: null, initiator_user_id: null, initiator_department_id: null, initiator_name: null };
     const kind = b.task_kind ?? 'planned';
     const internal = b.is_product_internal ? 1 : 0;
+    if (b.is_focus && (kind !== 'planned' || internal)) throw badRequest('Фокусной может быть только плановая общая задача');
     const db = ctx.env.DB;
     const statusId = b.status_id ?? 'st_f_new';
     const sem = await semanticOf(ctx, statusId);
@@ -215,12 +220,12 @@ export function registerFeatureRoutes(r: Router) {
       const statements = [
         stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, author_name, assignee_name,
             requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by,
-            task_kind, is_product_internal, initiator_type, initiator_user_id, initiator_department_id, initiator_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            task_kind, is_product_internal, initiator_type, initiator_user_id, initiator_department_id, initiator_name, is_focus)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id, num, b.external_ref ?? null, b.title, b.description ?? '', b.category_id ?? null, b.epic_id ?? null, statusId, b.stage_id ?? null,
           b.author_name ?? user.name, b.assignee_name ?? null, b.requested_at ?? now.slice(0, 10), b.planned_start ?? null, b.planned_end ?? null,
           sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id,
-          kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name),
+          kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0),
         ...[...new Set(b.tags ?? [])].map((t) => stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', id, t)),
         ...[...new Set(b.offer_ids ?? [])].map((o) => stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', id, o, now, user.id)),
         ...Object.entries(b.estimates ?? {}).map(([t, h]) => stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?)', id, t, h, now, user.id)),
@@ -249,8 +254,15 @@ export function registerFeatureRoutes(r: Router) {
     if (f.merged_into_id) throw conflict('merged', 'Карточка объединена с другой — редактируйте основную');
     await validateRefs(ctx, b);
     const db = ctx.env.DB;
-    const { version, tags, offer_ids, initiator, is_product_internal, confirm_disclose, ...fields } = b;
+    const { version, tags, offer_ids, initiator, is_product_internal, confirm_disclose, is_focus, ...fields } = b;
     const patch: Row = { ...fields, ...(await initiatorColumns(ctx, initiator)) };
+    if (is_focus !== undefined) patch.is_focus = is_focus ? 1 : 0;
+    const nextKind = fields.task_kind ?? f.task_kind ?? 'planned';
+    const nextInternal = is_product_internal ?? isProductInternal(f);
+    if ((is_focus ?? !!f.is_focus) && (nextKind !== 'planned' || nextInternal)) {
+      if (is_focus) throw badRequest('Фокусной может быть только плановая общая задача');
+      patch.is_focus = 0; // a task that stops being a planned commitment loses the focus mark
+    }
     if (is_product_internal !== undefined) patch.is_product_internal = is_product_internal ? 1 : 0;
     const wasInternal = isProductInternal(f);
     if (wasInternal && patch.is_product_internal === 0 && !confirm_disclose) {

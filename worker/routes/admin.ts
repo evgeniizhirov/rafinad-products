@@ -259,6 +259,11 @@ export function registerAdminRoutes(r: Router) {
       public_show_estimates: z.boolean().optional(),
       public_show_capacity: z.boolean().optional(),
       planning_horizon: z.number().int().min(1).max(24).optional(),
+      // calendar generator (FR-06): reference sprint start (a Wednesday) and its release number
+      calendar_anchor_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 3, 'Опорная дата должна быть средой').optional(),
+      calendar_anchor_release: z.number().int().min(1).max(10000).optional(),
+      calendar_releases_ahead: z.number().int().min(1).max(12).optional(),
+      calendar_months_ahead: z.number().int().min(1).max(36).optional(),
     }));
     const db = ctx.env.DB;
     const statements = [];

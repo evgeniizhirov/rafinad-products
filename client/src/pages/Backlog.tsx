@@ -29,7 +29,7 @@ export function Backlog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq]);
   const apiQs = new URLSearchParams();
-  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag']) {
+  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus']) {
     const v = params.get(k);
     if (v) apiQs.set(k, v);
   }
@@ -39,7 +39,8 @@ export function Backlog() {
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
-  const activeFilters = FILTERS.filter((k) => params.get(k)).length + (params.get('q') ? 1 : 0) + (params.get('flag') ? 1 : 0) + (params.get('tag') ? 1 : 0);
+  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus'].filter((k) => params.get(k)).length;
+  const sprints = useApi<any>(params.get('sprint') ? '/sprints' : null);
   // quick filters coming from the overview tiles / tags (not represented by the selects)
   const statusParam = params.get('status');
   const semanticStatus = statusParam && !d.statuses('feature').some((s) => s.id === statusParam) ? SEMANTIC_LABEL[statusParam] ?? statusParam : null;
@@ -47,6 +48,8 @@ export function Backlog() {
     ...(params.get('flag') ? [{ key: 'flag', label: FLAG_LABEL[params.get('flag')!] ?? params.get('flag')! }] : []),
     ...(semanticStatus ? [{ key: 'status', label: `Статус: ${semanticStatus}` }] : []),
     ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
+    ...(params.get('sprint') ? [{ key: 'sprint', label: `Спринт ${params.get('sprint') === 'none' ? 'не указан' : (sprints.data?.sprints ?? []).find((s: any) => s.id === params.get('sprint'))?.code ?? ''}` }] : []),
+    ...(params.get('focus') === '1' ? [{ key: 'focus', label: 'Фокусные задачи' }] : []),
     ...(params.get('initiator') && !params.get('initiator')!.startsWith('department:') && params.get('initiator') !== 'none' ? [{ key: 'initiator', label: `Инициатор: ${params.get('initiator')!.replace(/^(text|user):/, '')}` }] : []),
   ];
 
