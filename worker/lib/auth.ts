@@ -74,6 +74,9 @@ export const perms = {
   editCatalog: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
   seeDrafts: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
   comment: (u: SessionUser | null) => !!u,
+  // FR-04: membership is re-read from department_memberships on every request (loadSessionUser),
+  // so a change applies to existing sessions immediately. Future API keys (FR-01) must go through
+  // the same check: a `priorities:write-own` scope never replaces the current membership.
   voteFor: (u: SessionUser | null, departmentId: string) => !!u && u.departmentIds.includes(departmentId),
   overrideVote: (u: SessionUser | null) => !!u && u.role === 'admin',
   plan: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
