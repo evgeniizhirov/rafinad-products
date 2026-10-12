@@ -1,7 +1,7 @@
 // Roadmap (Now / Next / Later + timeline) and the overview dashboard.
 import { all, bool } from '../lib/db';
 import { json, type Router } from '../lib/http';
-import { canSee, featureDto, indexWorld, loadWorld, metaDto, viewerOf, visibleFeatures } from '../lib/world';
+import { canSee, featureDto, hasFlag, indexWorld, loadWorld, metaDto, viewerOf, visibleFeatures } from '../lib/world';
 import { sortFeatures } from './features';
 import { activePeriods, currentLoad, currentPeriodId } from './planning';
 import { releaseSummary } from './releases';
@@ -65,19 +65,11 @@ export function registerDashboardRoutes(r: Router) {
       const sem = idx.status.get(f.status_id)?.semantic ?? 'new';
       bySemantic[sem] = (bySemantic[sem] ?? 0) + 1;
     }
-    const open = rows.filter((f) => !['done', 'cancelled'].includes(idx.status.get(f.status_id)?.semantic));
+    const open = rows.filter((f) => hasFlag('open', f, w, idx));
     const ranked = sortFeatures(open, w, idx, 'priority');
-    const blocked = open.filter((f) => {
-      if (idx.status.get(f.status_id)?.semantic === 'blocked') return true;
-      return w.relations.some((x) => {
-        if (x.type !== 'blocks' || x.to_id !== f.id) return false;
-        const b = idx.feature.get(x.from_id);
-        const sem = b ? idx.status.get(b.status_id)?.semantic : null;
-        return b && !b.merged_into_id && sem !== 'done' && sem !== 'cancelled';
-      });
-    });
-    const unvoted = open.filter((f) => !(idx.votesBy.get(f.id) ?? []).length).length;
-    const unestimated = open.filter((f) => !(idx.estimatesBy.get(f.id) ?? []).some((e) => e.hours > 0)).length;
+    const blocked = open.filter((f) => hasFlag('blocked', f, w, idx));
+    const unvoted = open.filter((f) => hasFlag('unvoted', f, w, idx)).length;
+    const unestimated = open.filter((f) => hasFlag('unestimated', f, w, idx)).length;
     const periods = activePeriods(w);
     const cur = currentPeriodId(w);
     const ci = periods.findIndex((p) => p.id === cur);

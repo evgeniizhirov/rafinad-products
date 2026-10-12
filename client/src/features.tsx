@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import { I } from './icons';
 import { api, ApiError, invalidate, mutate, openFeature, toast, useApi, useApp, useClickOutside, useDebounced, useDict } from './lib';
-import { Cubes, Field, Modal, ReasonModal, ScoreCell, StatusPill, VisBadge } from './ui';
+import { Cubes, Field, Modal, ReasonModal, ScoreCell, StatusPill, useDirty, VisBadge } from './ui';
 
 export function FeatureTitle({ f, sub = true }: { f: any; sub?: boolean }) {
   return (
@@ -10,7 +10,10 @@ export function FeatureTitle({ f, sub = true }: { f: any; sub?: boolean }) {
       <div className="t">{f.title}</div>
       {sub && (
         <div className="sub ellipsis">
-          {f.epic && !f.epic.hidden ? f.epic.title : f.category?.name ?? ''}
+          {[f.epic && !f.epic.hidden ? f.epic.title : f.category?.name, f.assignee_name].filter(Boolean).join(', ')}
+          {(f.tags ?? []).slice(0, 3).map((t: string) => (
+            <span key={t} className="tag" style={{ marginLeft: 6, fontSize: 11, padding: '0 5px' }}>{t}</span>
+          ))}
           {f.open_blockers > 0 && (
             <span style={{ color: 'var(--danger)', marginLeft: 8 }}>
               <I.chain style={{ width: 13, height: 13, verticalAlign: '-2px' }} /> блокировок: {f.open_blockers}
@@ -163,6 +166,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     private_notes: feature?.private_notes ?? '',
     ...defaults,
   }));
+  const dirty = useDirty(v);
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: any) => setV((s) => ({ ...s, [k]: e.target.value }));
   const nul = (x: string) => (x === '' ? null : x);
@@ -186,6 +190,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
   return (
     <Modal
       wide
+      dirty={dirty}
       title={feature ? `Редактирование ${feature.key}` : 'Новая задача'}
       onClose={onClose}
       footer={

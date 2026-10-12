@@ -5,6 +5,8 @@ import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useD
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
 const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period'] as const;
+const FLAG_LABEL: Record<string, string> = { open: 'Открытые задачи', blocked: 'С блокировками', unvoted: 'Без голосов отделов', unestimated: 'Без оценки часов' };
+const SEMANTIC_LABEL: Record<string, string> = { new: 'новые', analysis: 'на проработке', ready: 'готовы к планированию', planned: 'запланированы', in_progress: 'в работе', blocked: 'заблокированы', postponed: 'отложены', done: 'завершены', cancelled: 'отменены' };
 
 export function Backlog() {
   const { me, meta } = useApp();
@@ -26,7 +28,7 @@ export function Backlog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq]);
   const apiQs = new URLSearchParams();
-  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility']) {
+  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag']) {
     const v = params.get(k);
     if (v) apiQs.set(k, v);
   }
@@ -36,7 +38,15 @@ export function Backlog() {
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
-  const activeFilters = FILTERS.filter((k) => params.get(k)).length + (params.get('q') ? 1 : 0);
+  const activeFilters = FILTERS.filter((k) => params.get(k)).length + (params.get('q') ? 1 : 0) + (params.get('flag') ? 1 : 0) + (params.get('tag') ? 1 : 0);
+  // quick filters coming from the overview tiles / tags (not represented by the selects)
+  const statusParam = params.get('status');
+  const semanticStatus = statusParam && !d.statuses('feature').some((s) => s.id === statusParam) ? SEMANTIC_LABEL[statusParam] ?? statusParam : null;
+  const chips: { key: string; label: string }[] = [
+    ...(params.get('flag') ? [{ key: 'flag', label: FLAG_LABEL[params.get('flag')!] ?? params.get('flag')! }] : []),
+    ...(semanticStatus ? [{ key: 'status', label: `Статус: ${semanticStatus}` }] : []),
+    ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
+  ];
 
   const sel = (k: string, label: string, options: { id: string; name: string }[], extra?: { id: string; name: string }[]) => (
     <select className="select" aria-label={label} value={params.get(k) ?? ''} onChange={(e) => setParam(k, e.target.value || null)}>
@@ -80,6 +90,16 @@ export function Backlog() {
         <span className="grow" />
         {data && <span className="muted small">{data.total} {data.total === 1 ? 'задача' : 'задач'}</span>}
       </div>
+      {chips.length > 0 && (
+        <div className="row wrap" style={{ marginBottom: 12 }}>
+          <span className="small muted">Показаны:</span>
+          {chips.map((c) => (
+            <button key={c.key} className="pill beet" style={{ border: 0, cursor: 'pointer' }} onClick={() => setParam(c.key, null)} title="Снять фильтр">
+              {c.label} ✕
+            </button>
+          ))}
+        </div>
+      )}
       <ErrorBox error={error} />
       {!data && loading && <div className="panel"><Loading rows={8} /></div>}
       {data && view === 'table' && (

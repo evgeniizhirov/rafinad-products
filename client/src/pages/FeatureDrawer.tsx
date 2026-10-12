@@ -9,7 +9,9 @@ type Tab = 'about' | 'priority' | 'resources' | 'links' | 'history';
 export function FeatureDrawer() {
   const [key, setKey] = useQueryParam('f');
   const [tab, setTab] = useState<Tab>('about');
-  useEffect(() => setTab('about'), [key]);
+  useEffect(() => {
+    setTab('about');
+  }, [key]);
   useEffect(() => {
     if (!key) return;
     const k = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('.modal') && setKey(null);
@@ -175,7 +177,9 @@ function Resources({ f }: { f: any }) {
   const canPlan = !!me?.permissions.plan && !me.must_change_password;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const { move, modal } = usePlacement();
-  useEffect(() => setDraft({}), [f.version, JSON.stringify(f.estimates)]);
+  useEffect(() => {
+    setDraft({});
+  }, [f.version, JSON.stringify(f.estimates)]);
   if (f.estimates === undefined) return <Empty title="Оценки трудозатрат не опубликованы">Они доступны сотрудникам после входа.</Empty>;
   const teams = d.activeTeams;
   const dirty = Object.keys(draft).length > 0;

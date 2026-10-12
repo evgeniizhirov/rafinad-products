@@ -7,6 +7,7 @@
 // protected fields (status, stage, manual estimates, visibility, votes, plans…) are never overwritten
 // unless the user explicitly ticks them.
 
+import { flatToCanonical, type FlatConfig } from './flatSheet';
 import { findCycle, type Edge } from './graph';
 import { normalizeTitle, parseDate, parseHours, sanitizeCell, similarity } from './text';
 
@@ -14,9 +15,14 @@ export type SheetKey = 'epics' | 'features' | 'offers' | 'relations';
 export const SHEET_KEYS: SheetKey[] = ['epics', 'offers', 'features', 'relations'];
 
 export interface ImportConfig {
+  /** 'template' — four sheets Epics/Features/Offers/Relations; 'flat' — one sheet of tasks with a column mapping */
+  format?: 'template' | 'flat';
   sheets: Record<SheetKey, string>;
   /** extra column header → resource team code (in addition to automatic `<code>_hours`) */
   hoursColumns: Record<string, string>;
+  flat?: FlatConfig;
+  /** visibility of cards created by this source; TZ default is «черновик» */
+  newVisibility?: 'draft' | 'internal';
 }
 
 export const DEFAULT_IMPORT_CONFIG: ImportConfig = {
@@ -28,13 +34,20 @@ export const SHEET_COLUMNS: Record<SheetKey, { required: string[]; optional: str
   epics: { required: ['external_id', 'title'], optional: ['description', 'category', 'status', 'visibility'] },
   features: {
     required: ['external_id', 'title'],
-    optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'visibility'],
+    optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'assignee', 'planned_end', 'closed_at', 'tags', 'visibility'],
   },
   offers: { required: ['external_id', 'name'], optional: ['description', 'category', 'status', 'visibility'] },
   relations: { required: ['from_type', 'from_external_id', 'relation_type', 'to_type', 'to_external_id'], optional: [] },
 };
 
-export type SheetsData = Partial<Record<SheetKey, string[][]>>;
+/** raw sheets as read from the source; `flat` holds the single sheet of the 'flat' format */
+export type SheetsData = Partial<Record<SheetKey | 'flat', string[][]>>;
+
+/** names of the sheets to read for a config */
+export function sourceSheetNames(config: ImportConfig): { key: SheetKey | 'flat'; name: string }[] {
+  if (config.format === 'flat' && config.flat) return [{ key: 'flat', name: config.flat.sheet }];
+  return SHEET_KEYS.map((k) => ({ key: k, name: config.sheets[k] }));
+}
 
 export interface SnapshotEntity {
   id: string;
@@ -49,6 +62,9 @@ export interface SnapshotEntity {
   epic_id?: string | null;
   stage_id?: string | null;
   requested_at?: string | null;
+  assignee_name?: string | null;
+  planned_end?: string | null;
+  tags?: string[];
   estimates?: Record<string, { hours: number; is_manual: number }>;
 }
 
@@ -127,6 +143,9 @@ const FIELD_LABELS: Record<string, string> = {
   status_id: 'Статус',
   stage_id: 'Этап',
   requested_at: 'Дата постановки',
+  assignee_name: 'Исполнитель',
+  planned_end: 'Срок',
+  tags: 'Теги',
 };
 
 export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'affects_offer', 'belongs_to_epic'] as const;
@@ -212,15 +231,50 @@ export function resolveMerged(map: Map<string, SnapshotEntity>, id: string): Sna
   return e;
 }
 
-export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Snapshot): ItemDraft[] {
+export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string } = {}): ItemDraft[] {
   const L = buildLookup(snap);
   const items: ItemDraft[] = [];
   let seq = 0;
+  const today = opts.today ?? new Date().toISOString().slice(0, 10);
+
+  // 'flat' format: convert the single task sheet into canonical Features rows first
+  let sheets: SheetsData = rawSheets;
+  const sheetNameOf = (key: SheetKey) => (config.format === 'flat' && config.flat && key === 'features' ? config.flat.sheet : config.sheets[key]);
+  let flatDerived: Map<number, boolean> | null = null;
+  let flatProblems: Map<number, string[]> | null = null;
+  if (config.format === 'flat' && config.flat) {
+    sheets = {};
+    const raw = rawSheets.flat;
+    if (raw && raw.length) {
+      const conv = flatToCanonical(raw, config.flat, snap.teams.map((t) => t.code.toLowerCase()), today);
+      if (conv.missing.includes(config.flat.columns.title)) {
+        items.push({
+          seq: seq++, sheet: config.flat.sheet, rowNumber: 1, entityType: 'sheet', externalId: null, action: 'error', targetId: null, targetVersion: null,
+          candidates: [], payload: {}, diff: [], warnings: [], resolution: null,
+          errors: [`Лист «${config.flat.sheet}»: нет колонки «${config.flat.columns.title}» с названием задачи`],
+        });
+        return items;
+      }
+      sheets.features = conv.rows;
+      flatDerived = conv.derived;
+      flatProblems = conv.problems;
+      if (conv.missing.length) {
+        items.push({
+          seq: seq++, sheet: config.flat.sheet, rowNumber: 1, entityType: 'sheet', externalId: null, action: 'unchanged', targetId: null, targetVersion: null,
+          candidates: [], payload: {}, diff: [], errors: [], resolution: null,
+          warnings: [`Колонки не найдены и будут пропущены: ${conv.missing.map((m) => `«${m}»`).join(', ')}`],
+        });
+      }
+    }
+  }
   const hoursCols = hoursColumnMap(config, snap.teams);
   const teamName = new Map(snap.teams.map((t) => [t.id, t.name]));
 
   // external ids present in this import (per entity type) → item, used by Relations and epic links
   const inRun: Record<'epic' | 'feature' | 'offer', Map<string, ItemDraft>> = { epic: new Map(), feature: new Map(), offer: new Map() };
+
+  // flat sheets often list the same task twice (assigned block + general list): flag, never merge silently
+  const flatTitles = new Map<string, { row: number; assignee: string }>();
 
   const push = (it: Omit<ItemDraft, 'seq'>) => {
     const d = { ...it, seq: seq++ };
@@ -230,7 +284,7 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
 
   for (const key of SHEET_KEYS) {
     const rows = sheets[key];
-    const sheetName = config.sheets[key];
+    const sheetName = sheetNameOf(key);
     if (!rows || rows.length === 0) continue;
     const header = rows[0].map((h) => sanitizeCell(h, 200));
     const idx = headerIndex(header);
@@ -248,9 +302,11 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
       return i === undefined ? '' : sanitizeCell(row[i], max);
     };
 
+    const has = (col: string) => idx.has(col);
     for (let r = 1; r < rows.length; r++) {
-      const row = rows[r];
+      const row = rows[r] ?? [];
       const rowNumber = r + 1;
+      if (row.every((c) => !String(c ?? '').trim())) continue; // blank row
       if (key === 'relations') {
         items.push(relationItem(seq++, sheetName, rowNumber, row, cell, L, inRun, snap));
         continue;
@@ -264,14 +320,26 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
       if (!externalId) errors.push('Не заполнен обязательный столбец external_id');
       if (!title) errors.push(`Не заполнен обязательный столбец ${titleCol}`);
       if (title.length > 300) errors.push(`Название длиннее 300 символов (${title.length})`);
+      const isDerived = !!flatDerived?.get(r);
       if (externalId && inRun[entityType].has(lc(externalId))) {
-        errors.push(`Повтор external_id «${externalId}» — уже встречался в строке ${inRun[entityType].get(lc(externalId))!.rowNumber}`);
+        const prev = inRun[entityType].get(lc(externalId))!.rowNumber;
+        errors.push(isDerived
+          ? `Повтор: та же задача с тем же исполнителем уже есть в строке ${prev} — строка не импортируется`
+          : `Повтор external_id «${externalId}» — уже встречался в строке ${prev}`);
       }
-      const description = cell(row, 'description');
+      for (const p of flatProblems?.get(r) ?? []) warnings.push(p);
+      if (flatDerived && title && !errors.length) {
+        const k = normalizeTitle(title);
+        const seen = flatTitles.get(k);
+        const who = cell(row, 'assignee', 120);
+        if (seen) warnings.push(`Такая же задача есть в строке ${seen.row}${seen.assignee ? ` (${seen.assignee})` : ' (без исполнителя)'} — если это одна задача, удалите повтор в таблице или объедините карточки`);
+        else flatTitles.set(k, { row: rowNumber, assignee: who });
+      }
+      const description = has('description') ? cell(row, 'description') : undefined;
 
       // dictionaries
       const categoryRaw = cell(row, 'category', 200);
-      let category_id: string | null = null;
+      let category_id: string | null | undefined = has('category') ? null : undefined;
       if (categoryRaw) {
         category_id = L.categoryByName.get(lc(categoryRaw)) ?? null;
         if (!category_id) warnings.push(`Категория «${categoryRaw}» не найдена в справочнике — будет пустой`);
@@ -288,10 +356,11 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
       }
 
       const payload: Record<string, any> = { external_id: externalId, title, description, category_id, status_id, visibility_hint: visibilityRaw || null };
+      if (isDerived) payload.derived_id = true;
 
       if (entityType === 'feature') {
         const epicExt = cell(row, 'epic_external_id', 200);
-        payload.epic_ext = epicExt || null;
+        payload.epic_ext = has('epic_external_id') ? epicExt || null : undefined;
         if (epicExt) {
           const runEpic = inRun.epic.get(lc(epicExt));
           if (runEpic?.action === 'error') errors.push(`Эпик «${epicExt}» (строка ${runEpic.rowNumber}) содержит ошибки`);
@@ -304,10 +373,20 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
           if (!payload.stage_id) warnings.push(`Этап «${stageRaw}» не найден в справочнике`);
         }
         const reqRaw = cell(row, 'requested_at', 50);
-        payload.requested_at = null;
+        payload.requested_at = has('requested_at') ? null : undefined;
         if (reqRaw) {
           payload.requested_at = parseDate(reqRaw);
           if (!payload.requested_at) warnings.push(`Дата «${reqRaw}» не распознана (ожидается ГГГГ-ММ-ДД или ДД.ММ.ГГГГ)`);
+        }
+        if (has('assignee')) payload.assignee_name = cell(row, 'assignee', 120) || null;
+        for (const dc of ['planned_end', 'closed_at'] as const) {
+          if (!has(dc)) continue;
+          const raw = cell(row, dc, 50);
+          payload[dc] = raw ? parseDate(raw) : null;
+          if (raw && !payload[dc]) warnings.push(`Дата «${raw}» не распознана (ожидается ГГГГ-ММ-ДД или ДД.ММ.ГГГГ)`);
+        }
+        if (has('tags')) {
+          payload.tags = [...new Set(cell(row, 'tags', 500).split(',').map((t) => t.trim().slice(0, 40)).filter(Boolean))].sort();
         }
         const estimates: Record<string, number> = {};
         for (const [col, teamId] of hoursCols) {
@@ -361,7 +440,7 @@ export function buildPreview(sheets: SheetsData, config: ImportConfig, snap: Sna
 
       if (target) {
         if (matchNote) warnings.push(matchNote);
-        const diff = diffEntity(entityType, target, payload, lastValues, L, teamName);
+        const diff = diffEntity(entityType, target, payload, lastValues, L, teamName, { statusFollowsSource: config.format === 'flat' });
         const action: Action = diff.length ? 'update' : 'unchanged';
         const fields: Record<string, 'source' | 'local'> = {};
         for (const d of diff) if (d.kind === 'update') fields[d.field] = 'source';
@@ -447,25 +526,35 @@ function localValues(type: string, e: SnapshotEntity, L: Lookup): Record<string,
     v.epic = e.epic_id ? epicKey(L, e.epic_id) : null;
     v.stage_id = e.stage_id ?? null;
     v.requested_at = e.requested_at ?? null;
+    v.assignee_name = e.assignee_name ?? null;
+    v.planned_end = e.planned_end ?? null;
+    v.tags = tagsKey(e.tags ?? []);
     for (const [teamId, est] of Object.entries(e.estimates ?? {})) v[`hours:${teamId}`] = est.hours;
   }
   return v;
 }
 
+const tagsKey = (tags: string[]) => [...tags].map((t) => t.trim()).filter(Boolean).sort().join(', ');
+
 /** source values in the same comparable form (also stored as link.last_values after apply) */
 export function sourceValues(type: string, payload: Record<string, any>): Record<string, unknown> {
+  // fields whose column is absent in the sheet are `undefined` and never compared or overwritten
   const v: Record<string, unknown> = {
     title: payload.title,
-    description: payload.description ?? '',
-    category_id: payload.category_id ?? null,
+    description: payload.description === undefined ? undefined : payload.description ?? '',
+    category_id: payload.category_id,
     status_id: payload.status_id ?? null,
   };
   if (type === 'feature') {
-    v.epic = payload.epic_ext ?? null;
+    v.epic = payload.epic_ext;
     v.stage_id = payload.stage_id ?? null;
-    v.requested_at = payload.requested_at ?? null;
+    v.requested_at = payload.requested_at;
+    v.assignee_name = payload.assignee_name;
+    v.planned_end = payload.planned_end;
+    v.tags = payload.tags === undefined ? undefined : tagsKey(payload.tags);
     for (const [teamId, h] of Object.entries(payload.estimates ?? {})) v[`hours:${teamId}`] = h;
   }
+  for (const k of Object.keys(v)) if (v[k] === undefined) delete v[k];
   return v;
 }
 
@@ -480,6 +569,7 @@ function diffEntity(
   last: Record<string, unknown> | null,
   L: Lookup,
   teamName: Map<string, string>,
+  opts: { statusFollowsSource?: boolean } = {},
 ): DiffEntry[] {
   const local = localValues(type, target, L);
   const source = sourceValues(type, payload);
@@ -499,10 +589,11 @@ function diffEntity(
     return undefined;
   };
 
-  const descriptive = ['title', 'description', 'category_id', ...(type === 'feature' ? ['epic', 'requested_at'] : [])];
+  const descriptive = ['title', 'description', 'category_id', ...(type === 'feature' ? ['epic', 'requested_at', 'assignee_name', 'planned_end', 'tags'] : [])];
   const protectedFields = ['status_id', ...(type === 'feature' ? ['stage_id'] : [])];
 
   for (const f of descriptive) {
+    if (!(f in source)) continue; // column absent in this source
     const s = source[f];
     const l = local[f];
     if (f === 'category_id' && s === null && payload.category_id === null && l !== null) {
@@ -523,7 +614,10 @@ function diffEntity(
     if (eq(s, l)) continue;
     const lastV = last ? last[f] : undefined;
     if (last && eq(s, lastV)) continue;
-    out.push({ field: f, label: label(f), local: l ?? null, source: s, last: lastV ?? null, localLabel: display(f, l), sourceLabel: display(f, s), kind: 'protected' });
+    // a task-list sheet owns the status of its tasks («Сделано»): while nobody changed the status in the system
+    // (local = last imported value) the new value is a plain update; a local change keeps the field protected
+    const follows = f === 'status_id' && !!opts.statusFollowsSource && !!last && f in last && eq(l, lastV);
+    out.push({ field: f, label: label(f), local: l ?? null, source: s, last: lastV ?? null, localLabel: display(f, l), sourceLabel: display(f, s), kind: follows ? 'update' : 'protected' });
   }
 
   if (type === 'feature') {

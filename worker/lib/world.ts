@@ -252,12 +252,48 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     else if (r.type === 'duplicate_of') (r.from_id === f.id ? rel.duplicate_of : rel.duplicates).push(ref);
   }
   dto.relations = rel;
-  dto.open_blockers = (w.relations as Row[]).filter((r) => r.type === 'blocks' && r.to_id === f.id).filter((r) => {
-    const b = idx.feature.get(r.from_id);
-    const sem = b ? idx.status.get(b.status_id)?.semantic : null;
-    return b && !b.merged_into_id && sem !== 'done' && sem !== 'cancelled';
-  }).length;
+  dto.open_blockers = openBlockerIds(f, w, idx).length;
   return dto;
+}
+
+// ───────────────────────── shared feature predicates (overview counters = backlog filters) ─────────────────────────
+
+export const isClosed = (f: Row, idx: Indexes) => ['done', 'cancelled'].includes(idx.status.get(f.status_id)?.semantic);
+
+/** blocking features that are not done/cancelled */
+export function openBlockerIds(f: Row, w: World, idx: Indexes): string[] {
+  return (w.relations as Row[])
+    .filter((r) => r.type === 'blocks' && r.to_id === f.id)
+    .map((r) => r.from_id as string)
+    .filter((id) => {
+      const b = idx.feature.get(id);
+      const sem = b ? idx.status.get(b.status_id)?.semantic : null;
+      return !!b && !b.merged_into_id && sem !== 'done' && sem !== 'cancelled';
+    });
+}
+
+export type FeatureFlag = 'open' | 'blocked' | 'unvoted' | 'unestimated';
+
+export const FLAG_LABELS: Record<FeatureFlag, string> = {
+  open: 'Открытые задачи',
+  blocked: 'С блокировками',
+  unvoted: 'Без голосов отделов',
+  unestimated: 'Без оценки часов',
+};
+
+/** Every flag except "open" also implies the task is open (not done / cancelled). */
+export function hasFlag(flag: FeatureFlag, f: Row, w: World, idx: Indexes): boolean {
+  if (isClosed(f, idx)) return false;
+  switch (flag) {
+    case 'open':
+      return true;
+    case 'blocked':
+      return idx.status.get(f.status_id)?.semantic === 'blocked' || openBlockerIds(f, w, idx).length > 0;
+    case 'unvoted':
+      return !(idx.votesBy.get(f.id) ?? []).length;
+    case 'unestimated':
+      return !(idx.estimatesBy.get(f.id) ?? []).some((e) => e.hours > 0);
+  }
 }
 
 export function visibleFeatures(w: World, viewer: Viewer): Row[] {

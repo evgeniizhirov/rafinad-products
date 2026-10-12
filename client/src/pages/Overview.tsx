@@ -22,12 +22,19 @@ export function Overview() {
         </div>
       )}
       <div className="kpis">
-        <a className="kpi" href="/backlog?hide_closed=1" onClick={go('/backlog?hide_closed=1')}><b className="num">{k.open}</b><span>открытых задач</span></a>
-        <a className="kpi" href="/backlog?status=in_progress" onClick={go('/backlog?status=in_progress')}><b className="num">{k.in_progress}</b><span>в работе</span></a>
-        <a className="kpi" href="/backlog?status=ready" onClick={go('/backlog?status=ready')}><b className="num">{k.ready}</b><span>готовы к планированию</span></a>
-        <div className={`kpi ${k.blocked ? 'alert' : ''}`}><b className="num">{k.blocked}</b><span>с блокировками</span></div>
-        <div className="kpi"><b className="num">{k.unestimated}</b><span>без оценки часов</span></div>
-        <div className="kpi"><b className="num">{k.unvoted}</b><span>без голосов отделов</span></div>
+        {[
+          { to: '/backlog?flag=open', n: k.open, label: 'открытых задач' },
+          { to: '/backlog?status=in_progress', n: k.in_progress, label: 'в работе' },
+          { to: '/backlog?status=ready', n: k.ready, label: 'готовы к планированию' },
+          { to: '/backlog?flag=blocked', n: k.blocked, label: 'с блокировками', alert: k.blocked > 0 },
+          { to: '/backlog?flag=unestimated', n: k.unestimated, label: 'без оценки часов' },
+          { to: '/backlog?flag=unvoted', n: k.unvoted, label: 'без голосов отделов' },
+        ].map((t) => (
+          <a key={t.to} className={`kpi ${t.alert ? 'alert' : ''}`} href={t.to} onClick={go(t.to)} title="Показать эти задачи списком">
+            <b className="num">{t.n}</b>
+            <span>{t.label}</span>
+          </a>
+        ))}
       </div>
 
       <div className="grid-2" style={{ marginBottom: 16 }}>
@@ -105,7 +112,10 @@ export function Overview() {
         </section>
 
         <section className="panel">
-          <div className="panel-head"><h2 className="grow">Блокировки</h2></div>
+          <div className="panel-head">
+            <h2 className="grow">Блокировки</h2>
+            {data.kpi.blocked > 0 && <a className="btn ghost sm" href="/backlog?flag=blocked" onClick={go('/backlog?flag=blocked')}>Все ({data.kpi.blocked})</a>}
+          </div>
           <div className="list">
             {data.blocked.length === 0 && <Empty title="Блокировок нет" />}
             {data.blocked.map((f: any) => (

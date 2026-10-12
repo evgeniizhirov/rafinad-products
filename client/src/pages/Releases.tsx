@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { I } from '../icons';
 import { FeaturePicker, FeatureTitle } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict } from '../lib';
-import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, Progress, ReasonModal, Seg, StatusPill, VisBadge } from '../ui';
+import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, Progress, ReasonModal, Seg, StatusPill, VisBadge, useDirty } from '../ui';
 
 export function Releases() {
   const { me } = useApp();
@@ -200,6 +200,7 @@ function ReleaseForm({ release, onClose }: { release?: any; onClose: () => void 
     name: release?.name ?? '', version_label: release?.version_label ?? '', description: release?.description ?? '', status_id: release?.status?.id ?? d.statuses('release')[0]?.id ?? '',
     planned_date: release?.planned_date ?? '', actual_date: release?.actual_date ?? '', visibility: release?.visibility ?? 'internal',
   });
+  const dirty = useDirty(v);
   const set = (k: string) => (e: any) => setV((s) => ({ ...s, [k]: e.target.value }));
   const n = (x: string) => (x === '' ? null : x);
   const submit = async () => {
@@ -208,7 +209,7 @@ function ReleaseForm({ release, onClose }: { release?: any; onClose: () => void 
     if (r) { onClose(); if (!release && r.id) navigate(`/releases/${r.id}`); }
   };
   return (
-    <Modal title={release ? 'Релиз' : 'Новый релиз'} onClose={onClose} wide footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
+    <Modal title={release ? 'Релиз' : 'Новый релиз'} onClose={onClose} wide dirty={dirty} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
       <div className="form-grid">
         <Field label="Название"><input className="input" value={v.name} onChange={set('name')} autoFocus /></Field>
         <Field label="Версия"><input className="input" value={v.version_label} onChange={set('version_label')} placeholder="v3.7" /></Field>

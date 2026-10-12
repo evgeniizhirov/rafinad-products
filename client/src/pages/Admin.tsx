@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { I } from '../icons';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, ROLE_LABEL, toast, useApi, useApp, useQueryParam } from '../lib';
-import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs } from '../ui';
+import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs, useDirty } from '../ui';
 
 type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit';
 
@@ -78,7 +78,7 @@ function Users() {
           </div>
         </div>
       )}
-      {edit && <UserForm user={edit.id ? edit : null} onClose={() => setEdit(null)} onCreated={setCred} />}
+      {edit && <UserForm user={edit.id ? (data?.users ?? []).find((u: any) => u.id === edit.id) ?? edit : null} onClose={() => setEdit(null)} onCreated={setCred} />}
       {cred && <CredentialsModal cred={cred} onClose={() => setCred(null)} />}
     </div>
   );
@@ -131,6 +131,7 @@ function CredentialsModal({ cred, onClose }: { cred: any; onClose: () => void })
 function UserForm({ user, onClose, onCreated }: { user: any | null; onClose: () => void; onCreated: (r: any) => void }) {
   const { meta } = useApp();
   const [v, setV] = useState({ email: user?.email ?? '', name: user?.name ?? '', role: user?.role ?? 'department_lead', department_ids: user?.department_ids ?? [], is_active: user?.is_active ?? true, delivery: 'invite' });
+  const dirty = useDirty(v);
   const submit = async () => {
     if (user) {
       const r = await mutate(`/admin/users/${user.id}`, 'PATCH', { name: v.name, role: v.role, department_ids: v.department_ids, is_active: v.is_active, version: user.version }, 'Пользователь сохранён');
@@ -141,7 +142,7 @@ function UserForm({ user, onClose, onCreated }: { user: any | null; onClose: () 
     }
   };
   return (
-    <Modal title={user ? user.name : 'Новый пользователь'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim() || (!user && !v.email.trim())} onClick={submit}>{user ? 'Сохранить' : 'Создать'}</button></>}>
+    <Modal title={user ? user.name : 'Новый пользователь'} onClose={onClose} dirty={dirty} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim() || (!user && !v.email.trim())} onClick={submit}>{user ? 'Сохранить' : 'Создать'}</button></>}>
       <div className="form-grid">
         <Field label="Email" span2><input className="input" type="email" value={v.email} disabled={!!user} onChange={(e) => setV({ ...v, email: e.target.value })} autoFocus={!user} /></Field>
         <Field label="Имя" span2><input className="input" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} /></Field>
@@ -228,7 +229,7 @@ function Dictionary({ kind }: { kind: DictKind }) {
           </table>
         </div>
       </div>
-      {edit && <DictForm kind={kind} row={edit.id ? edit : null} onClose={() => setEdit(null)} />}
+      {edit && <DictForm kind={kind} row={edit.id ? rows.find((r) => r.id === edit.id) ?? edit : null} onClose={() => setEdit(null)} />}
     </div>
   );
 }
@@ -239,6 +240,7 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
     entity: row?.entity ?? 'feature', semantic: row?.semantic ?? 'new', sort_order: row?.sort_order ?? 0, start_date: row?.start_date ?? '', end_date: row?.end_date ?? '',
     is_active: row?.is_active ?? true,
   });
+  const dirty = useDirty(v);
   const set = (k: string, val: any) => setV((s) => ({ ...s, [k]: val }));
   const submit = async () => {
     const body: Record<string, any> = { name: v.name };
@@ -253,7 +255,7 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
     if (r) onClose();
   };
   return (
-    <Modal title={row ? row.name : 'Новая запись'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
+    <Modal title={row ? row.name : 'Новая запись'} onClose={onClose} dirty={dirty} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
       <div className="form-grid">
         <Field label="Название" span2><input className="input" value={v.name} onChange={(e) => set('name', e.target.value)} autoFocus /></Field>
         {['departments', 'teams', 'statuses', 'stages'].includes(kind) && (

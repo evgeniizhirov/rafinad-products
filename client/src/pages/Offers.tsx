@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { I } from '../icons';
 import { FeatureTitle } from '../features';
 import { fmtDate, mutate, navigate, openFeature, useApi, useApp, useDict } from '../lib';
-import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, RichText, StatusPill, VisBadge } from '../ui';
+import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, RichText, StatusPill, VisBadge, useDirty } from '../ui';
 
 export function Offers() {
   const { me } = useApp();
@@ -50,7 +50,7 @@ export function Offers() {
           </div>
         </div>
       )}
-      {edit && <OfferForm offer={edit.id ? edit : null} onClose={() => setEdit(null)} />}
+      {edit && <OfferForm offer={edit.id ? (data?.offers ?? []).find((o: any) => o.id === edit.id) ?? edit : null} onClose={() => setEdit(null)} />}
     </>
   );
 }
@@ -116,6 +116,7 @@ function OfferForm({ offer, onClose }: { offer: any | null; onClose: () => void 
     name: offer?.name ?? '', external_code: offer?.external_code ?? '', description: offer?.description ?? '', direction: offer?.direction ?? '',
     category_id: offer?.category?.id ?? '', status_id: offer?.status?.id ?? d.statuses('offer')[0]?.id ?? '', visibility: offer?.visibility ?? 'internal',
   });
+  const dirty = useDirty(v);
   const set = (k: string) => (e: any) => setV((s) => ({ ...s, [k]: e.target.value }));
   const n = (x: string) => (x === '' ? null : x);
   const submit = async () => {
@@ -124,7 +125,7 @@ function OfferForm({ offer, onClose }: { offer: any | null; onClose: () => void 
     if (r) onClose();
   };
   return (
-    <Modal title={offer ? 'Оффер' : 'Новый оффер'} onClose={onClose} wide footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
+    <Modal title={offer ? 'Оффер' : 'Новый оффер'} onClose={onClose} wide dirty={dirty} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.name.trim()} onClick={submit}>Сохранить</button></>}>
       <div className="form-grid">
         <Field label="Название" span2><input className="input" value={v.name} onChange={set('name')} autoFocus /></Field>
         <Field label="Внешний ID оффера"><input className="input" value={v.external_code} onChange={set('external_code')} placeholder="OF-1024" /></Field>

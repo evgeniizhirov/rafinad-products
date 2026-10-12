@@ -7,7 +7,7 @@ import { perms, requirePerm, requireUser } from '../lib/auth';
 import { auditStmt, diffFields, type Change } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
-import { canSee, featureDto, featureRef, indexWorld, loadWorld, viewerOf, visibleFeatures, type World } from '../lib/world';
+import { canSee, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, loadWorld, viewerOf, visibleFeatures, type FeatureFlag, type World } from '../lib/world';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД').nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -106,7 +106,11 @@ export function registerFeatureRoutes(r: Router) {
         `rf-${f.number} ${f.title} ${f.description} ${(idx.tagsBy.get(f.id) ?? []).join(' ')} ${viewer !== 'guest' ? f.external_ref ?? '' : ''}`.toLowerCase().includes(q),
       );
     }
-    if (p.get('hide_closed') === '1') rows = rows.filter((f) => !['done', 'cancelled'].includes(idx.status.get(f.status_id)?.semantic));
+    if (p.get('hide_closed') === '1') rows = rows.filter((f) => !isClosed(f, idx));
+    const flag = p.get('flag') as FeatureFlag | null;
+    if (flag && flag in FLAG_LABELS) rows = rows.filter((f) => hasFlag(flag, f, w, idx));
+    const tag = (p.get('tag') || '').trim().toLowerCase();
+    if (tag) rows = rows.filter((f) => (idx.tagsBy.get(f.id) ?? []).some((t) => t.toLowerCase() === tag));
     rows = sortFeatures(rows, w, idx, p.get('sort') || 'priority');
     return json({ features: rows.map((f) => featureDto(f, viewer, w, idx)), total: rows.length });
   });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { I } from '../icons';
 import { fmtDate, fmtH, mutate, openFeature, useApi, useApp, useDict } from '../lib';
-import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, Progress, StatusPill, VisBadge } from '../ui';
+import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, Progress, StatusPill, VisBadge, useDirty } from '../ui';
 
 export function Epics() {
   const { me } = useApp();
@@ -95,7 +95,7 @@ export function Epics() {
           )}
         </div>
       )}
-      {edit && <EpicForm epic={edit.id ? edit : null} onClose={() => setEdit(null)} />}
+      {edit && <EpicForm epic={edit.id ? (data?.epics ?? []).find((e: any) => e.id === edit.id) ?? edit : null} onClose={() => setEdit(null)} />}
     </>
   );
 }
@@ -108,6 +108,7 @@ function EpicForm({ epic, onClose }: { epic: any | null; onClose: () => void }) 
     status_id: epic?.status?.id ?? d.statuses('epic')[0]?.id ?? '', start_date: epic?.start_date ?? '', end_date: epic?.end_date ?? '',
     visibility: epic?.visibility ?? 'internal', external_ref: epic?.external_ref ?? '',
   });
+  const dirty = useDirty(v);
   const set = (k: string) => (e: any) => setV((s) => ({ ...s, [k]: e.target.value }));
   const n = (x: string) => (x === '' ? null : x);
   const submit = async () => {
@@ -116,7 +117,7 @@ function EpicForm({ epic, onClose }: { epic: any | null; onClose: () => void }) 
     if (r) onClose();
   };
   return (
-    <Modal title={epic ? `Эпик ${epic.key}` : 'Новый эпик'} onClose={onClose} wide footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.title.trim()} onClick={submit}>Сохранить</button></>}>
+    <Modal title={epic ? `Эпик ${epic.key}` : 'Новый эпик'} onClose={onClose} wide dirty={dirty} footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" disabled={!v.title.trim()} onClick={submit}>Сохранить</button></>}>
       <div className="form-grid">
         <Field label="Название" span2><input className="input" value={v.title} onChange={set('title')} autoFocus /></Field>
         <Field label="Описание" span2><textarea className="textarea" value={v.description} onChange={set('description')} /></Field>

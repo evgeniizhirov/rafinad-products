@@ -104,7 +104,9 @@ function App() {
   useEffect(() => {
     if (me?.must_change_password && path !== '/account') navigate('/account', true);
   }, [me, path]);
-  useEffect(() => window.scrollTo(0, 0), [path]);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [path]);
 
   if (path === '/login') return <Login onDone={() => { meQ.reload(); metaQ.reload(); }} />;
   if (path.startsWith('/invite/')) return <AcceptInvite token={path.split('/')[2]} onDone={() => meQ.reload()} />;

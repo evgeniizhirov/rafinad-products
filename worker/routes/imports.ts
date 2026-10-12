@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { parseCsv, toCsv } from '../domain/csv';
 import { findCycle, type Edge } from '../domain/graph';
 import {
-  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceValues, unresolvedReasons,
+  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceSheetNames, sourceValues, unresolvedReasons,
   type ImportConfig, type ItemDraft, type Resolution, type SheetKey, type SheetsData, type Snapshot,
 } from '../domain/importer';
 import { DEMO_SHEETS } from '../demoData';
+import { TASKFLOW_CONFIG } from '../domain/flatSheet';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
 import { sha256Hex } from '../lib/crypto';
@@ -15,10 +16,26 @@ import { fetchSpreadsheet, parseSpreadsheetId, serviceAccount } from '../lib/goo
 import { badRequest, conflict, HttpError, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import type { D1Database, D1PreparedStatement } from '../env';
 
-const configSchema = z.object({
-  sheets: z.object({ epics: z.string().trim().min(1).max(100), features: z.string().trim().min(1).max(100), offers: z.string().trim().min(1).max(100), relations: z.string().trim().min(1).max(100) }),
-  hoursColumns: z.record(z.string().trim().min(1).max(100), z.string().trim().min(1).max(40)).default({}),
+const colName = z.string().trim().min(1).max(100);
+const optCol = z.string().trim().max(100).optional().transform((v) => (v ? v : undefined));
+const flatSchema = z.object({
+  sheet: colName,
+  columns: z.object({
+    id: optCol, title: colName, description: optCol, category: optCol, assignee: optCol,
+    deadline: z.array(colName).max(5).optional(), closed_at: optCol, done: optCol, priority: optCol, fact_hours: optCol,
+  }),
+  flags: z.record(colName, z.string().trim().min(1).max(40)).default({}),
+  hours: z.record(colName, z.string().trim().min(1).max(40)).default({}),
 });
+const configSchema = z.object({
+  format: z.enum(['template', 'flat']).default('template'),
+  sheets: z.object({ epics: colName, features: colName, offers: colName, relations: colName }).default(DEFAULT_IMPORT_CONFIG.sheets),
+  hoursColumns: z.record(colName, z.string().trim().min(1).max(40)).default({}),
+  flat: flatSchema.optional(),
+  newVisibility: z.enum(['draft', 'internal']).default('draft'),
+}).refine((c) => c.format !== 'flat' || !!c.flat, { message: 'Для формата «одна таблица» укажите лист и колонки' });
+
+const configOf = (s: Row) => parseJson<ImportConfig>(s.config, DEFAULT_IMPORT_CONFIG);
 
 function sourceDto(s: Row, lastRun?: Row | null) {
   const csv = parseJson<Record<string, string>>(s.csv_data, {});
@@ -37,30 +54,39 @@ async function getSource(ctx: Ctx, id: string) {
   return s;
 }
 
-/** Reads the source. Never writes anything: a failing Google API leaves the backlog untouched. */
-async function readSource(ctx: Ctx, s: Row): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null }> {
-  const config = parseJson<ImportConfig>(s.config, DEFAULT_IMPORT_CONFIG);
+/**
+ * Reads the source. Never writes anything: a failing Google API leaves the backlog untouched.
+ * `files` — a CSV export uploaded by the user instead of reading Google directly (key: sheet key or 'flat').
+ */
+async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null }> {
+  const config = configOf(s);
+  const wanted = sourceSheetNames(config);
   const data: SheetsData = {};
   const notes: string[] = [];
   let title: string | null = null;
-  if (s.kind === 'google') {
+  if (files) {
+    for (const w of wanted) {
+      if (files[w.key]) data[w.key] = parseCsv(files[w.key]);
+      else if (wanted.length > 1) notes.push(`Файл для листа «${w.name}» не загружен — лист пропущен`);
+    }
+    title = 'Загруженная выгрузка';
+  } else if (s.kind === 'google') {
     if (!s.spreadsheet_id) throw badRequest('Не указана таблица Google Sheets');
-    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, SHEET_KEYS.map((k) => config.sheets[k]));
+    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, wanted.map((w) => w.name));
     title = res.title;
-    for (const k of SHEET_KEYS) {
-      const name = config.sheets[k];
-      if (res.data[name]) data[k] = res.data[name];
-      else notes.push(`Лист «${name}» не найден — пропущен`);
+    for (const w of wanted) {
+      if (res.data[w.name]) data[w.key] = res.data[w.name];
+      else notes.push(`Лист «${w.name}» не найден${res.available.length ? ` (есть: ${res.available.slice(0, 20).join(', ')})` : ''} — пропущен`);
     }
   } else {
     const csv = parseJson<Record<string, string>>(s.csv_data, {});
-    for (const k of SHEET_KEYS) {
-      if (csv[k]) data[k] = parseCsv(csv[k]);
-      else notes.push(`CSV для листа «${config.sheets[k]}» не загружен — пропущен`);
+    for (const w of wanted) {
+      if (csv[w.key]) data[w.key] = parseCsv(csv[w.key]);
+      else notes.push(`CSV для листа «${w.name}» не загружен — пропущен`);
     }
   }
   if (!Object.keys(data).length) throw badRequest('В источнике нет ни одного листа для импорта');
-  const canonical = SHEET_KEYS.map((k) => [k, data[k] ?? null]);
+  const canonical = wanted.map((w) => [w.key, data[w.key] ?? null]);
   return { data, hash: await sha256Hex(JSON.stringify(canonical)), notes, title };
 }
 
@@ -73,17 +99,23 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT id, code, name FROM resource_teams WHERE is_active = 1 ORDER BY sort_order'),
     q('SELECT entity_type, external_id, entity_id, last_values FROM source_entity_links WHERE source_id = ?', sourceId),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version FROM epics'),
-    q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at FROM features'),
+    q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at, assignee_name, planned_end FROM features'),
     q('SELECT id, name AS title, description, category_id, status_id, external_code AS external_ref, version FROM offers'),
     q('SELECT type, from_id, to_id FROM feature_relations'),
     q('SELECT feature_id, offer_id FROM feature_offers'),
     q('SELECT feature_id, team_id, hours, is_manual FROM feature_estimates'),
+    q('SELECT feature_id, tag FROM feature_tags ORDER BY tag'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
   for (const e of r(10)) {
     if (!est.has(e.feature_id)) est.set(e.feature_id, {});
     est.get(e.feature_id)![e.team_id] = { hours: e.hours, is_manual: e.is_manual };
+  }
+  const tagsBy = new Map<string, string[]>();
+  for (const t of r(11)) {
+    if (!tagsBy.has(t.feature_id)) tagsBy.set(t.feature_id, []);
+    tagsBy.get(t.feature_id)!.push(t.tag);
   }
   return {
     categories: r(0) as Snapshot['categories'],
@@ -92,7 +124,7 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     teams: r(3) as Snapshot['teams'],
     links: r(4).map((l) => ({ ...l, last_values: parseJson(l.last_values, null) })) as Snapshot['links'],
     epics: r(5) as Snapshot['epics'],
-    features: r(6).map((f) => ({ ...f, estimates: est.get(f.id) ?? {} })) as Snapshot['features'],
+    features: r(6).map((f) => ({ ...f, estimates: est.get(f.id) ?? {}, tags: tagsBy.get(f.id) ?? [] })) as Snapshot['features'],
     offers: r(7) as Snapshot['offers'],
     relations: r(8) as Snapshot['relations'],
     featureOffers: r(9) as Snapshot['featureOffers'],
@@ -123,7 +155,7 @@ async function runDto(ctx: Ctx, runId: string) {
   const drafts = items.map(toDraft);
   return {
     id: run.id, source_id: run.source_id, status: run.status, created_at: run.created_at, created_by: run.created_by_name, applied_at: run.applied_at,
-    applied_by: run.applied_by_name, counts: parseJson(run.counts, null), error: run.error, source_hash: run.source_hash,
+    applied_by: run.applied_by_name, counts: parseJson(run.counts, null), error: run.error, source_hash: run.source_hash, origin: run.origin ?? 'source',
     summary: countItems(drafts),
     unresolved: run.status === 'preview' ? unresolvedReasons(drafts) : [],
     items: items.map(itemDto),
@@ -214,6 +246,8 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         last_run_id = excluded.last_run_id, updated_at = excluded.updated_at`,
       source.id, type, ext, entityId, JSON.stringify(sourceValues(type, payload)), run.id, run.id, now, now);
   const reason = `Импорт: ${source.name}`;
+  const newVisibility = configOf(source).newVisibility === 'internal' ? 'internal' : 'draft';
+  const today = now.slice(0, 10);
 
   // 2. entity statements in dependency order: epics → offers → features
   for (const type of ['epic', 'offer', 'feature'] as const) {
@@ -227,19 +261,20 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         const status = pl.status_id ?? defaultStatus(type);
         if (type === 'epic') {
           st.push(stmt(db, `INSERT INTO epics (id, number, external_ref, title, description, category_id, status_id, visibility, created_at, updated_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`, p.id, p.number, ext, pl.title, pl.description ?? '', pl.category_id, status, now, now, user.id));
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, p.number, ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
         } else if (type === 'offer') {
           const codeTaken = snap.offers.some((o) => o.external_ref && lc(o.external_ref) === lc(ext));
           st.push(stmt(db, `INSERT INTO offers (id, external_code, name, description, category_id, status_id, visibility, created_at, updated_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`, p.id, codeTaken ? null : ext, pl.title, pl.description ?? '', pl.category_id, status, now, now, user.id));
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, codeTaken ? null : ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
         } else {
           const epicId = resolveExt('epic', pl.epic_ext);
           if (pl.epic_ext && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${pl.epic_ext}» пропущен или не найден — измените решение по эпику`);
           st.push(stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, requested_at, closed_at,
-              visibility, created_at, updated_at, created_by, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
-            p.id, p.number, ext, pl.title, pl.description ?? '', pl.category_id, epicId, status, pl.stage_id ?? null, pl.requested_at ?? now.slice(0, 10),
-            doneStatuses.has(status) ? now.slice(0, 10) : null, now, now, user.id, user.id));
+              assignee_name, planned_end, visibility, created_at, updated_at, created_by, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            p.id, p.number, pl.derived_id ? null : ext, pl.title, pl.description ?? '', pl.category_id ?? null, epicId, status, pl.stage_id ?? null, pl.requested_at ?? today,
+            doneStatuses.has(status) ? pl.closed_at ?? today : null, pl.assignee_name ?? null, pl.planned_end ?? null, newVisibility, now, now, user.id, user.id));
+          for (const tag of pl.tags ?? []) st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) VALUES (?, ?)', p.id, tag));
           for (const [teamId, h] of Object.entries(pl.estimates ?? {})) {
             st.push(stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 0, ?, ?)', p.id, teamId, h, now, user.id));
           }
@@ -265,12 +300,15 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       const cols: Record<string, unknown> = {};
       const changes: Change[] = [];
       const estimateWrites: [string, number][] = [];
+      let tagsWrite: string[] | null = null;
       for (const df of d.diff) {
         const choice = df.kind === 'protected' ? (res.protected?.[df.field] ? 'source' : 'local') : res.fields?.[df.field] ?? (df.kind === 'update' ? 'source' : undefined);
         if (df.kind === 'conflict') counts.conflicts.push({ row: `${d.sheet}:${d.rowNumber}`, field: df.field, choice: choice ?? 'local' });
         if (choice !== 'source') continue;
         if (df.field.startsWith('hours:')) {
           estimateWrites.push([df.field.slice(6), Number(df.source)]);
+        } else if (df.field === 'tags') {
+          tagsWrite = String(df.source ?? '').split(',').map((t) => t.trim()).filter(Boolean);
         } else if (df.field === 'epic') {
           const epicId = resolveExt('epic', df.source as string | null);
           if (df.source && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${df.source}» не найден`);
@@ -278,7 +316,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         } else {
           const col = type === 'offer' && df.field === 'title' ? 'name' : df.field;
           cols[col] = df.source;
-          if (df.field === 'status_id' && type === 'feature') cols.closed_at = doneStatuses.has(df.source as string) ? now.slice(0, 10) : null;
+          if (df.field === 'status_id' && type === 'feature') cols.closed_at = doneStatuses.has(df.source as string) ? pl.closed_at ?? today : null;
         }
         changes.push({ field: df.field, old: df.local, new: df.source });
       }
@@ -293,6 +331,10 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       const keys = Object.keys(cols);
       st.push(stmt(db, `UPDATE ${TABLE[type]} SET ${[...keys.map((k) => `${k} = ?`), 'updated_at = ?', 'version = version + 1'].join(', ')} WHERE id = ?`,
         ...keys.map((k) => cols[k]), now, p.id));
+      if (tagsWrite) {
+        st.push(stmt(db, 'DELETE FROM feature_tags WHERE feature_id = ?', p.id));
+        for (const tag of tagsWrite) st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) VALUES (?, ?)', p.id, tag));
+      }
       for (const [teamId, h] of estimateWrites) {
         st.push(stmt(db, `INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 0, ?, ?)
           ON CONFLICT(feature_id, team_id) DO UPDATE SET hours = excluded.hours, is_manual = 0, updated_at = excluded.updated_at, updated_by = excluded.updated_by, version = version + 1`,
@@ -349,7 +391,11 @@ export function registerImportRoutes(r: Router) {
       out.push(sourceDto(s, last));
     }
     const sa = serviceAccount(ctx.env);
-    return json({ sources: out, service_account_email: sa?.client_email ?? null, default_config: DEFAULT_IMPORT_CONFIG, columns: SHEET_COLUMNS });
+    return json({
+      sources: out, service_account_email: sa?.client_email ?? null, columns: SHEET_COLUMNS,
+      default_config: { ...DEFAULT_IMPORT_CONFIG, format: 'template', newVisibility: 'draft' },
+      flat_preset: { ...DEFAULT_IMPORT_CONFIG, format: 'flat', flat: TASKFLOW_CONFIG, newVisibility: 'internal' },
+    });
   });
 
   r.post('/api/import/sources', async (ctx) => {
@@ -411,7 +457,7 @@ export function registerImportRoutes(r: Router) {
   r.put('/api/import/sources/:id/csv', async (ctx) => {
     const user = requirePerm(ctx, perms.import);
     const b = await readJson(ctx, z.object({
-      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), offers: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional() }),
+      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), offers: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional(), flat: z.string().max(1_000_000).optional() }),
       version: z.number().int(),
     }));
     const s = await getSource(ctx, ctx.params.id);
@@ -434,18 +480,26 @@ export function registerImportRoutes(r: Router) {
   r.post('/api/import/sources/:id/check', async (ctx) => {
     requirePerm(ctx, perms.import);
     const s = await getSource(ctx, ctx.params.id);
-    const config = parseJson<ImportConfig>(s.config, DEFAULT_IMPORT_CONFIG);
+    const config = configOf(s);
     let ok = false;
     let message = '';
-    const sheets: { key: SheetKey; name: string; found: boolean; rows: number; missing_columns: string[] }[] = [];
+    const sheets: { key: string; name: string; found: boolean; rows: number; missing_columns: string[] }[] = [];
     try {
       const { data, notes, title } = await readSource(ctx, s);
-      for (const k of SHEET_KEYS) {
-        const rows = data[k];
+      for (const w of sourceSheetNames(config)) {
+        const rows = data[w.key];
         const header = (rows?.[0] ?? []).map((h) => h.trim().toLowerCase());
-        sheets.push({ key: k, name: config.sheets[k], found: !!rows, rows: rows ? rows.length - 1 : 0, missing_columns: rows ? SHEET_COLUMNS[k].required.filter((c) => !header.includes(c)) : [] });
+        let required: string[];
+        if (w.key === 'flat') {
+          const c = config.flat!.columns;
+          required = [c.title, c.id, c.description, c.category, c.assignee, c.closed_at, c.done, c.priority, c.fact_hours, ...(c.deadline ?? []),
+            ...Object.keys(config.flat!.flags ?? {}), ...Object.keys(config.flat!.hours ?? {})].filter((x): x is string => !!x);
+        } else required = SHEET_COLUMNS[w.key].required;
+        const dataRows = rows ? rows.slice(1).filter((r) => r.some((c) => String(c ?? '').trim())).length : 0;
+        sheets.push({ key: w.key, name: w.name, found: !!rows, rows: dataRows, missing_columns: rows ? required.filter((c) => !header.includes(c.trim().toLowerCase())) : [] });
       }
-      ok = sheets.some((x) => x.found) && sheets.every((x) => !x.found || x.missing_columns.length === 0);
+      const titleMissing = config.format === 'flat' && sheets[0]?.missing_columns.includes(config.flat!.columns.title);
+      ok = sheets.some((x) => x.found) && !titleMissing && (config.format === 'flat' || sheets.every((x) => !x.found || x.missing_columns.length === 0));
       message = [title ? `Таблица «${title}»` : 'Источник прочитан', ...notes].join('. ');
     } catch (e) {
       message = e instanceof HttpError ? e.message : 'Не удалось прочитать источник';
@@ -454,12 +508,21 @@ export function registerImportRoutes(r: Router) {
     return json({ ok, message, sheets });
   });
 
+  /**
+   * Preview. Body (optional): `{ files: { <sheet key | 'flat'>: csvText } }` — a CSV export uploaded by the user
+   * instead of reading Google (works without a service account; the run is marked origin = 'file').
+   */
   r.post('/api/import/sources/:id/preview', async (ctx) => {
     const user = requirePerm(ctx, perms.import);
     const s = await getSource(ctx, ctx.params.id);
     if (!bool(s.is_active)) throw badRequest('Источник отключён');
-    const { data, hash, notes } = await readSource(ctx, s);
-    const config = parseJson<ImportConfig>(s.config, DEFAULT_IMPORT_CONFIG);
+    let files: Record<string, string> | undefined;
+    if ((ctx.req.headers.get('content-type') || '').includes('application/json')) {
+      const b = await readJson(ctx, z.object({ files: z.record(z.string().max(40), z.string().max(1_500_000)).optional() }));
+      if (b.files && Object.keys(b.files).length) files = b.files;
+    }
+    const { data, hash, notes } = await readSource(ctx, s, files);
+    const config = configOf(s);
     const snap = await loadSnapshot(ctx.env.DB, s.id);
     const items = buildPreview(data, config, snap);
     if (items.length > 3000) throw badRequest('Слишком много строк для одного импорта (максимум 3000)');
@@ -469,8 +532,8 @@ export function registerImportRoutes(r: Router) {
     const st = [
       // previous unfinished previews of this source become stale
       stmt(db, `UPDATE import_runs SET status = 'discarded' WHERE source_id = ? AND status = 'preview'`, s.id),
-      stmt(db, 'INSERT INTO import_runs (id, source_id, status, source_hash, created_at, created_by, counts) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        runId, s.id, 'preview', hash, now, user.id, JSON.stringify({ notes })),
+      stmt(db, 'INSERT INTO import_runs (id, source_id, status, source_hash, created_at, created_by, counts, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        runId, s.id, 'preview', hash, now, user.id, JSON.stringify({ notes }), files ? 'file' : 'source'),
     ];
     for (const it of items) {
       st.push(stmt(db, `INSERT INTO import_items (id, run_id, seq, sheet, row_number, entity_type, external_id, action, target_id, target_version, candidates, payload, diff, errors, warnings, resolution)
@@ -513,7 +576,7 @@ export function registerImportRoutes(r: Router) {
 
   r.post('/api/import/runs/:id/bulk', async (ctx) => {
     requirePerm(ctx, perms.import);
-    const b = await readJson(ctx, z.object({ action: z.enum(['skip_duplicates', 'create_duplicates', 'keep_local_conflicts', 'take_source_conflicts']) }));
+    const b = await readJson(ctx, z.object({ action: z.enum(['skip_duplicates', 'create_duplicates', 'link_exact_duplicates', 'keep_local_conflicts', 'take_source_conflicts']) }));
     const db = ctx.env.DB;
     const run = await first(db, 'SELECT * FROM import_runs WHERE id = ?', ctx.params.id);
     if (!run) throw notFound();
@@ -524,6 +587,11 @@ export function registerImportRoutes(r: Router) {
       const res = parseJson<Resolution | null>(it.resolution, null);
       if (it.action === 'duplicate' && !res && (b.action === 'skip_duplicates' || b.action === 'create_duplicates')) {
         st.push(stmt(db, 'UPDATE import_items SET resolution = ? WHERE id = ?', JSON.stringify({ mode: b.action === 'skip_duplicates' ? 'skip' : 'create' }), it.id));
+      }
+      if (it.action === 'duplicate' && !res && b.action === 'link_exact_duplicates') {
+        // only an unambiguous exact-title match is linked automatically; similar titles stay for a human decision
+        const exact = parseJson<{ id: string; score: number }[]>(it.candidates, []).filter((c) => c.score >= 1);
+        if (exact.length === 1) st.push(stmt(db, 'UPDATE import_items SET resolution = ? WHERE id = ?', JSON.stringify({ mode: 'link', targetId: exact[0].id }), it.id));
       }
       if (it.action === 'update' && res?.mode === 'update' && (b.action === 'keep_local_conflicts' || b.action === 'take_source_conflicts')) {
         const fields = { ...(res.fields ?? {}) };
@@ -562,8 +630,8 @@ export function registerImportRoutes(r: Router) {
     const unresolved = unresolvedReasons(drafts);
     if (unresolved.length) throw badRequest('Не все спорные строки разобраны', { unresolved });
 
-    // the source must be exactly what the user reviewed
-    const fresh = await readSource(ctx, source);
+    // the source must be exactly what the user reviewed (an uploaded export IS the reviewed data)
+    const fresh = run.origin === 'file' ? { hash: run.source_hash } : await readSource(ctx, source);
     if (fresh.hash !== run.source_hash) {
       await runSql(db, `UPDATE import_runs SET status = 'stale', error = ? WHERE id = ? AND status = 'preview'`, 'Источник изменился после предпросмотра', run.id);
       throw conflict('stale', 'Таблица изменилась после предпросмотра. Сформируйте предпросмотр заново — устаревшие изменения не применены.');

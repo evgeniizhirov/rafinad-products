@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { I } from './icons';
 import { fmtH, useApp, useToasts, VISIBILITY_LABEL, type ApiError } from './lib';
 
@@ -147,20 +147,53 @@ export function Notice({ kind = 'info', children }: { kind?: 'info' | 'warn' | '
   );
 }
 
-export function Modal({ title, onClose, children, footer, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+/**
+ * Dialog. Closes on ✕, «Отмена», Escape or a click on the backdrop — but only when the press
+ * also STARTED on the backdrop (selecting text in a field and releasing outside never closes it).
+ * With `dirty`, closing by Escape/backdrop asks for confirmation so typed changes are not lost.
+ */
+export function Modal({ title, onClose, children, footer, wide, dirty }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; dirty?: boolean }) {
+  const pressedOnBackdrop = useRef(false);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const softClose = () => {
+    if (dirtyRef.current && !window.confirm('Закрыть без сохранения? Изменения будут потеряны.')) return;
+    closeRef.current();
+  };
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // only the top-most dialog reacts
+      const wraps = document.querySelectorAll('.modal-wrap');
+      if (wraps[wraps.length - 1] !== wrapRef.current) return;
+      e.stopPropagation();
+      softClose();
+    };
     document.addEventListener('keydown', k);
     return () => document.removeEventListener('keydown', k);
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const wrapRef = useRef<HTMLDivElement>(null);
   return (
     <>
-      <div className="scrim" style={{ zIndex: 59 }} onClick={onClose} />
-      <div className="modal-wrap" role="dialog" aria-modal="true" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="scrim" style={{ zIndex: 59 }} />
+      <div
+        ref={wrapRef}
+        className="modal-wrap"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(e) => { pressedOnBackdrop.current = e.target === e.currentTarget; }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && pressedOnBackdrop.current) softClose();
+          pressedOnBackdrop.current = false;
+        }}
+      >
         <div className={`modal ${wide ? 'wide' : ''}`}>
           <div className="modal-head">
             <h3 className="grow">{title}</h3>
-            <button className="btn ghost icon sm" onClick={onClose} aria-label="Закрыть"><I.x /></button>
+            <button className="btn ghost icon sm" onClick={() => onClose()} aria-label="Закрыть"><I.x /></button>
           </div>
           <div className="modal-body">{children}</div>
           {footer && <div className="modal-foot">{footer}</div>}
@@ -168,6 +201,12 @@ export function Modal({ title, onClose, children, footer, wide }: { title: React
       </div>
     </>
   );
+}
+
+/** true when the form value differs from its initial value */
+export function useDirty(value: unknown): boolean {
+  const [initial] = useState(() => JSON.stringify(value));
+  return JSON.stringify(value) !== initial;
 }
 
 /** Confirmation that requires a written reason (overload, approved release changes, admin overrides). */
