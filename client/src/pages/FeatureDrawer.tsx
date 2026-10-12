@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
-import { FeatureForm, FeaturePicker, usePlacement, VoteControl } from '../features';
+import { FeatureForm, FeaturePicker, KIND_LABEL, usePlacement, VoteControl } from '../features';
 import { fmtDate, fmtDateTime, fmtH, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
 
@@ -99,6 +99,16 @@ function About({ f }: { f: any }) {
         <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
         <dt>Релиз</dt>
         <dd>{f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}</dd>
+        <dt>Тип работы</dt>
+        <dd>{KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}</dd>
+        {f.initiator !== undefined && (
+          <>
+            <dt>Инициатор</dt>
+            <dd>
+              {f.initiator ? <>{f.initiator.name}<span className="muted small"> {f.initiator.type === 'department' ? '(отдел)' : f.initiator.type === 'user' ? '(пользователь)' : ''}{f.initiator.inactive ? ', неактивен' : ''}</span></> : <span className="muted">Не указан</span>}
+            </dd>
+          </>
+        )}
         {f.author_name !== undefined && (<><dt>Автор запроса</dt><dd>{f.author_name || '—'}</dd><dt>Ответственный</dt><dd>{f.assignee_name || '—'}</dd></>)}
         <dt>Поставлена</dt>
         <dd>{fmtDate(f.requested_at)}</dd>
@@ -418,6 +428,8 @@ const FIELD: Record<string, string> = {
   title: 'название', description: 'описание', status_id: 'статус', stage_id: 'этап', category_id: 'категория', epic_id: 'эпик', visibility: 'публикация',
   period_id: 'период', placement_locked: 'фиксация', closed_at: 'дата завершения', tags: 'теги', offers: 'офферы', author_name: 'автор', assignee_name: 'ответственный',
   requested_at: 'дата постановки', planned_start: 'плановое начало', planned_end: 'плановое завершение', private_notes: 'заметки', external_ref: 'внешний ID',
+  task_kind: 'тип работы', is_product_internal: 'внутренняя задача продукта', initiator: 'инициатор', initiator_type: 'вид инициатора', initiator_name: 'инициатор',
+  initiator_user_id: 'инициатор (пользователь)', initiator_department_id: 'инициатор (отдел)',
   blocks: 'блокирует', related_to: 'связана', duplicate_of: 'дубль', merged_into: 'объединена с', merged_from: 'дубль', source: 'строка источника',
 };
 

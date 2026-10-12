@@ -119,7 +119,7 @@ export function registerCatalogRoutes(r: Router) {
   // ───── epics ─────
   r.get('/api/epics', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const epics = w.epics.filter((e) => canSee(viewer, e.visibility)).map((e) => epicSummary(e, viewer, w, idx));
     const orphan = w.features.filter((f) => !f.epic_id && !f.merged_into_id && canSee(viewer, f.visibility));
@@ -128,7 +128,7 @@ export function registerCatalogRoutes(r: Router) {
 
   r.get('/api/epics/:id', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const e = w.epics.find((x) => x.id === ctx.params.id || `ep-${x.number}` === ctx.params.id.toLowerCase());
     if (!e || !canSee(viewer, e.visibility)) throw notFound('Эпик не найден');
@@ -176,14 +176,14 @@ export function registerCatalogRoutes(r: Router) {
   // ───── offers ─────
   r.get('/api/offers', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     return json({ offers: w.offers.filter((o) => canSee(viewer, o.visibility)).map((o) => offerSummary(o, viewer, w, idx)) });
   });
 
   r.get('/api/offers/:id', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const o = idx.offer.get(ctx.params.id);
     if (!o || !canSee(viewer, o.visibility)) throw notFound('Оффер не найден');

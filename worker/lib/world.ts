@@ -19,6 +19,16 @@ export function canSee(viewer: Viewer, visibility: string): boolean {
   return visibility === 'public';
 }
 
+/** FR-02: hidden Product task (separate from visibility — 'internal' visibility is readable by every employee). */
+export const isProductInternal = (f: Row | undefined | null) => !!f && bool(f.is_product_internal);
+
+/** The one rule for a single task: visibility level AND the Product-internal flag. */
+export function canSeeFeature(viewer: Viewer, f: Row | undefined | null): boolean {
+  if (!f) return false;
+  if (isProductInternal(f) && viewer !== 'editor') return false;
+  return canSee(viewer, f.visibility);
+}
+
 export interface World {
   departments: Row[];
   teams: Row[];
@@ -38,9 +48,40 @@ export interface World {
   relations: Row[];
   releases: Row[];
   releaseFeatures: Row[];
+  /** id, name, is_active — for initiator names (never sent to guests) */
+  users: Row[];
 }
 
-export async function loadWorld(db: D1Database): Promise<World> {
+/**
+ * Loads the catalog for one viewer. Hidden Product tasks (FR-02) are removed together with every row that
+ * references them (votes, estimates, tags, offers, relations, release links), so no list, counter, graph,
+ * relation or aggregate built on the world can reveal them — not even as a "hidden" placeholder.
+ * They stay only when product/admin explicitly ask for them (`includeInternal`): the task list with
+ * `?internal=…` and the task card. General views (overview, roadmap, priorities, releases, epics, offers,
+ * planning) never include them, for any role.
+ */
+export async function loadWorld(db: D1Database, viewer: Viewer | 'system', opts: { includeInternal?: boolean } = {}): Promise<World> {
+  const w = await loadAll(db);
+  return (viewer === 'editor' || viewer === 'system') && opts.includeInternal ? w : withoutProductInternal(w);
+}
+
+export function withoutProductInternal(w: World): World {
+  const hidden = new Set(w.features.filter((f) => isProductInternal(f)).map((f) => f.id as string));
+  if (!hidden.size) return w;
+  const keep = (id: unknown) => !hidden.has(id as string);
+  return {
+    ...w,
+    features: w.features.filter((f) => keep(f.id)),
+    estimates: w.estimates.filter((x) => keep(x.feature_id)),
+    votes: w.votes.filter((x) => keep(x.feature_id)),
+    tags: w.tags.filter((x) => keep(x.feature_id)),
+    featureOffers: w.featureOffers.filter((x) => keep(x.feature_id)),
+    relations: w.relations.filter((x) => keep(x.from_id) && keep(x.to_id)),
+    releaseFeatures: w.releaseFeatures.filter((x) => keep(x.feature_id)),
+  };
+}
+
+async function loadAll(db: D1Database): Promise<World> {
   const q = (sql: string) => stmt(db, sql);
   const res = await db.batch([
     q('SELECT * FROM departments ORDER BY sort_order, name'),
@@ -61,6 +102,7 @@ export async function loadWorld(db: D1Database): Promise<World> {
     q('SELECT * FROM feature_relations'),
     q('SELECT * FROM releases ORDER BY planned_date IS NULL, planned_date, name'),
     q('SELECT * FROM release_features'),
+    q('SELECT id, name, is_active FROM users'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const settings: Record<string, string> = {};
@@ -68,7 +110,7 @@ export async function loadWorld(db: D1Database): Promise<World> {
   return {
     departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
     epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12), offers: r(13), featureOffers: r(14),
-    relations: r(15), releases: r(16), releaseFeatures: r(17),
+    relations: r(15), releases: r(16), releaseFeatures: r(17), users: r(18),
   };
 }
 
@@ -161,7 +203,7 @@ const statusDto = (s: Row | undefined) => (s ? { id: s.id, name: s.name, semanti
 const categoryDto = (c: Row | undefined) => (c ? { id: c.id, name: c.name, color: c.color } : null);
 
 export function featureRef(f: Row | undefined, viewer: Viewer, idx: Indexes) {
-  if (!f || !canSee(viewer, f.visibility)) return { hidden: true as const };
+  if (!f || !canSeeFeature(viewer, f)) return { hidden: true as const };
   return {
     id: f.id, number: f.number, key: `RF-${f.number}`, title: f.title, status: statusDto(idx.status.get(f.status_id)),
     ...(viewer === 'guest' ? {} : { visibility: f.visibility }),
@@ -227,7 +269,10 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     dto.estimate_total = Math.round(total * 10) / 10;
     dto.estimate_missing = activeTeams.filter((t) => !(t.id in estimates)).map((t) => t.id);
   }
+  dto.task_kind = f.task_kind ?? 'planned';
   if (viewer !== 'guest') {
+    dto.is_product_internal = isProductInternal(f);
+    dto.initiator = initiatorDto(f, w);
     dto.external_ref = f.external_ref;
     dto.author_name = f.author_name;
     dto.assignee_name = f.assignee_name;
@@ -296,8 +341,53 @@ export function hasFlag(flag: FeatureFlag, f: Row, w: World, idx: Indexes): bool
   }
 }
 
-export function visibleFeatures(w: World, viewer: Viewer): Row[] {
-  return w.features.filter((f) => !f.merged_into_id && canSee(viewer, f.visibility));
+/**
+ * Tasks of the general lists (backlog, priorities, roadmap, overview, releases, epics, offers, planning).
+ * Hidden Product tasks never belong there; product/admin open them with `scope = 'internal'` (or `'all'`).
+ */
+export function visibleFeatures(w: World, viewer: Viewer, scope: 'general' | 'internal' | 'all' = 'general'): Row[] {
+  return w.features.filter((f) => {
+    if (f.merged_into_id || !canSeeFeature(viewer, f)) return false;
+    if (scope === 'all') return true;
+    return scope === 'internal' ? isProductInternal(f) : !isProductInternal(f);
+  });
+}
+
+/**
+ * Only planned, non-hidden tasks take part in capacity planning, budgets and release composition (FR-02, FR-07).
+ * Bugs and operational improvements are visible in work views but never consume planned hours.
+ */
+export const isPlannable = (f: Row) => (f.task_kind ?? 'planned') === 'planned' && !isProductInternal(f);
+
+export const TASK_KINDS = ['planned', 'bug', 'operational_improvement'] as const;
+export type TaskKind = (typeof TASK_KINDS)[number];
+
+export type InitiatorType = 'free_text' | 'user' | 'department';
+
+/** Current name of the linked user / department, falling back to the snapshot taken when it was chosen. */
+export function initiatorDto(f: Row, w: World) {
+  const type = f.initiator_type as InitiatorType | null;
+  if (!type) return null;
+  if (type === 'user') {
+    const u = w.users.find((x) => x.id === f.initiator_user_id);
+    return { type, user_id: f.initiator_user_id ?? null, name: u?.name ?? f.initiator_name ?? 'Пользователь удалён', inactive: u ? !bool(u.is_active) : true };
+  }
+  if (type === 'department') {
+    const d = w.departments.find((x) => x.id === f.initiator_department_id);
+    return { type, department_id: f.initiator_department_id ?? null, name: d?.name ?? f.initiator_name ?? 'Отдел удалён', inactive: d ? !bool(d.is_active) : true };
+  }
+  return { type, name: f.initiator_name ?? '' };
+}
+
+/** "user:<id>" / "department:<id>" / "text:<substring>" */
+export function matchesInitiator(f: Row, w: World, filter: string): boolean {
+  const [kind, ...rest] = filter.split(':');
+  const value = rest.join(':');
+  if (kind === 'none') return !f.initiator_type;
+  if (kind === 'user') return f.initiator_type === 'user' && f.initiator_user_id === value;
+  if (kind === 'department') return f.initiator_type === 'department' && f.initiator_department_id === value;
+  if (kind === 'text') return !!f.initiator_type && (initiatorDto(f, w)?.name ?? '').toLowerCase().includes(value.toLowerCase());
+  return false;
 }
 
 export function metaDto(w: World, viewer: Viewer) {

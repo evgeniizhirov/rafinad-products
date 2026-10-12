@@ -4,7 +4,8 @@ import { FeatureCard, FeatureForm, FeatureTitle } from '../features';
 import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useDict, useLocation } from '../lib';
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
-const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period'] as const;
+const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
+export const KIND_OPTIONS = [{ id: 'planned', name: 'Плановые задачи' }, { id: 'bug', name: 'Баги' }, { id: 'operational_improvement', name: 'Оперативные доработки' }, { id: 'bug,operational_improvement', name: 'Баги и доработки' }];
 const FLAG_LABEL: Record<string, string> = { open: 'Открытые задачи', blocked: 'С блокировками', unvoted: 'Без голосов отделов', unestimated: 'Без оценки часов' };
 const SEMANTIC_LABEL: Record<string, string> = { new: 'новые', analysis: 'на проработке', ready: 'готовы к планированию', planned: 'запланированы', in_progress: 'в работе', blocked: 'заблокированы', postponed: 'отложены', done: 'завершены', cancelled: 'отменены' };
 
@@ -46,6 +47,7 @@ export function Backlog() {
     ...(params.get('flag') ? [{ key: 'flag', label: FLAG_LABEL[params.get('flag')!] ?? params.get('flag')! }] : []),
     ...(semanticStatus ? [{ key: 'status', label: `Статус: ${semanticStatus}` }] : []),
     ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
+    ...(params.get('initiator') && !params.get('initiator')!.startsWith('department:') && params.get('initiator') !== 'none' ? [{ key: 'initiator', label: `Инициатор: ${params.get('initiator')!.replace(/^(text|user):/, '')}` }] : []),
   ];
 
   const sel = (k: string, label: string, options: { id: string; name: string }[], extra?: { id: string; name: string }[]) => (
@@ -75,6 +77,9 @@ export function Backlog() {
         {sel('offer', 'Все офферы', (offers.data?.offers ?? []).map((o: any) => ({ id: o.id, name: o.name })))}
         {sel('release', 'Все релизы', (releases.data?.releases ?? []).map((r: any) => ({ id: r.id, name: r.name })), [{ id: 'none', name: 'Вне релизов' }])}
         {sel('period', 'Все периоды', d.activePeriods.map((p) => ({ id: p.id, name: p.name })), [{ id: 'none', name: 'Не запланированы' }])}
+        {sel('kind', 'Все типы работ', KIND_OPTIONS)}
+        {canEdit && sel('internal', 'Общие задачи', [{ id: '1', name: 'Внутренние задачи продукта' }, { id: 'all', name: 'Общие и внутренние' }])}
+        {meta.viewer !== 'guest' && sel('initiator', 'Любой инициатор', d.activeDepts.map((x) => ({ id: `department:${x.id}`, name: `Отдел: ${x.name}` })), [{ id: 'none', name: 'Инициатор не указан' }])}
         <select className="select" aria-label="Сортировка" value={params.get('sort') ?? 'priority'} onChange={(e) => setParam('sort', e.target.value === 'priority' ? null : e.target.value)}>
           <option value="priority">По приоритету</option>
           <option value="number">По номеру</option>

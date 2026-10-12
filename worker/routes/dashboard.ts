@@ -8,13 +8,13 @@ import { releaseSummary } from './releases';
 
 export function registerDashboardRoutes(r: Router) {
   r.get('/api/meta', async (ctx) => {
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewerOf(ctx.user));
     return json(metaDto(w, viewerOf(ctx.user)));
   });
 
   r.get('/api/roadmap', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const periods = activePeriods(w);
     const cur = currentPeriodId(w);
@@ -56,7 +56,7 @@ export function registerDashboardRoutes(r: Router) {
 
   r.get('/api/overview', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     // every aggregate is computed over what this viewer may see
     const rows = visibleFeatures(w, viewer);

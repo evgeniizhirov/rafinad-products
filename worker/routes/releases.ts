@@ -66,14 +66,14 @@ export function releaseSummary(rel: Row, viewer: Viewer, w: World, idx: Indexes,
 export function registerReleaseRoutes(r: Router) {
   r.get('/api/releases', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     return json({ releases: w.releases.filter((x) => canSee(viewer, x.visibility)).map((x) => releaseSummary(x, viewer, w, idx, true)) });
   });
 
   r.get('/api/releases/:id', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const rel = idx.release.get(ctx.params.id);
     if (!rel || !canSee(viewer, rel.visibility)) throw notFound('Релиз не найден');
@@ -141,8 +141,13 @@ export function registerReleaseRoutes(r: Router) {
     if (rel.approved_at && !b.reason) throw badRequest('Укажите причину изменения состава утверждённого релиза');
     const ids = [...new Set(b.feature_ids)];
     if (ids.length) {
-      const found = await all(db, `SELECT id, merged_into_id FROM features WHERE id IN (${placeholders(ids.length)})`, ...ids);
+      const found = await all(db, `SELECT id, merged_into_id, task_kind, is_product_internal FROM features WHERE id IN (${placeholders(ids.length)})`, ...ids);
       if (found.length !== ids.length || found.some((f) => f.merged_into_id)) throw badRequest('Указаны несуществующие или объединённые задачи');
+      const before0 = new Set((await all(db, 'SELECT feature_id FROM release_features WHERE release_id = ?', rel.id)).map((x) => x.feature_id));
+      // only newly added tasks are checked: legacy links are kept and can still be removed
+      const fresh = found.filter((f) => !before0.has(f.id));
+      if (fresh.some((f) => bool(f.is_product_internal))) throw badRequest('Внутренние задачи продукта не включаются в релизы');
+      if (fresh.some((f) => (f.task_kind ?? 'planned') !== 'planned')) throw badRequest('Баги и оперативные доработки не включаются в состав релиза');
     }
     const before = (await all(db, 'SELECT feature_id FROM release_features WHERE release_id = ?', rel.id)).map((x) => x.feature_id);
     const added = ids.filter((id) => !before.includes(id));

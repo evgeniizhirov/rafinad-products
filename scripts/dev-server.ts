@@ -20,8 +20,8 @@ mkdirSync(join(root, '.local'), { recursive: true });
 const fresh = !existsSync(dbFile);
 const db = createD1(dbFile);
 
+migrate(db); // applies only migrations missing in this database
 if (fresh) {
-  migrate(db);
   for (const s of seedSql()) db.raw.exec(s);
   const email = process.env.ADMIN_EMAIL || 'admin@rafinad.test';
   const password = process.env.ADMIN_PASSWORD || tempPassword();

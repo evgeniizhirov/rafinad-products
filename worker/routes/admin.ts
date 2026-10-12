@@ -89,6 +89,13 @@ const toDb = (v: unknown) => (typeof v === 'boolean' ? (v ? 1 : 0) : v);
 
 export function registerAdminRoutes(r: Router) {
   // ───── users ─────
+  /** Directory for pickers (initiator, future assignee): names only, active users, no e-mails. */
+  r.get('/api/users/directory', async (ctx) => {
+    requirePerm(ctx, perms.editCatalog);
+    const users = await all(ctx.env.DB, 'SELECT id, name FROM users WHERE is_active = 1 ORDER BY name');
+    return json({ users });
+  });
+
   r.get('/api/admin/users', async (ctx) => {
     requirePerm(ctx, perms.admin);
     const users = await all(ctx.env.DB, `SELECT id, email, name, role_code, is_active, must_change_password, created_at, last_login_at, version,
