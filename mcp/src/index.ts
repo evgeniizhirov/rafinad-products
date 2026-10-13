@@ -66,8 +66,11 @@ export async function handle(request: Request, env: Env, deps: { keys?: JWTVerif
   try {
     // Service binding avoids disallowed Worker-to-Worker fetches over workers.dev.
     // Tests may inject a stub fetcher, but production never falls back to global fetch.
-    const fetcher = deps.fetcher ?? ((input: RequestInfo | URL, init?: RequestInit) => env.ROADMAP_API.fetch(input, init));
-    const api = new Roadmap(env.RAFINAD_API_KEY, fetcher);
+    // Cloudflare documents passing a fully qualified Request to service bindings.
+    // Preserve method, headers, redirect policy and timeout; never use global fetch.
+    const fetcher = deps.fetcher ?? ((input: RequestInfo | URL, init?: RequestInit) =>
+      env.ROADMAP_API.fetch(new Request(input instanceof URL ? input.toString() : input, init)));
+    const api = new Roadmap(env.RAFINAD_API_KEY, fetcher, env.AUTH_DIAGNOSTICS === 'true');
     const handler = createMcpHandler(() => createServer(api, auth.canWrite));
     const response = await handler.fetch(request);
     const headers = new Headers(response.headers);

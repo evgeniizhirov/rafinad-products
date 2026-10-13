@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { handle } from '../src/index';
 import { env, keys, token, harness } from './helpers';
-import { Roadmap } from '../src/roadmap';
+import { Roadmap, RoadmapError } from '../src/roadmap';
 
 test('OAuth rejects missing, forged, expired, wrong issuer/audience/client/owner/scope tokens on every method', async () => {
   let fetched = 0;
@@ -126,10 +126,12 @@ test('production transport uses the Roadmap service binding with the API key', a
     ...env,
     ROADMAP_API: {
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        assert.equal(init, undefined, 'Service binding receives a constructed Request');
+        assert.ok(input instanceof Request, 'Use Request, not a URL object');
         seen.push({
-          url: String(input),
-          authorization: new Headers(init?.headers).get('authorization'),
-          redirect: init?.redirect,
+          url: input.url,
+          authorization: input.headers.get('authorization'),
+          redirect: input.redirect,
         });
         return Response.json({ user: { id: 'service-binding-user' } });
       },
@@ -166,4 +168,26 @@ test('missing Roadmap service binding fails closed, including during discovery',
   const response = await handle(new Request('https://mcp.test/.well-known/oauth-protected-resource/mcp'), missing);
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: 'integration_not_configured' });
+});
+
+test('transport diagnostics do not expose credentials, and user error stays generic', async () => {
+  const logs: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (line: string) => { logs.push(line); };
+  try {
+    const api = new Roadmap(env.RAFINAD_API_KEY, async () => {
+      throw new TypeError(`Service binding failed: ${env.RAFINAD_API_KEY}`);
+    }, true);
+    await assert.rejects(api.request('/auth/me'), (error: unknown) =>
+      error instanceof RoadmapError && error.status === 502 && error.code === 'unknown_result'
+    );
+    assert.deepEqual(logs.map(line => JSON.parse(line)), [{
+      event: 'roadmap_transport_failed',
+      category: 'TypeError',
+      detail: 'Service binding failed: [REDACTED]',
+    }]);
+    assert.ok(!logs.join('').includes(env.RAFINAD_API_KEY));
+  } finally {
+    console.warn = originalWarn;
+  }
 });
