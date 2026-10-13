@@ -66,5 +66,6 @@ export async function authenticate(request: Request, env: Env, keys?: JWTVerifyG
 
 /** RFC 6750 / RFC 9728: no error code when no token was sent; invalid_token when one was refused */
 export function challenge(env: Env, tokenSent = true) {
-  return `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource/mcp', env.MCP_RESOURCE)}", scope="roadmap:read"${tokenSent ? ', error="invalid_token"' : ''}`;
+  const requiredScopes = env.ENABLE_WRITES === 'true' ? 'roadmap:read roadmap:write' : 'roadmap:read';
+  return `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource/mcp', env.MCP_RESOURCE)}", scope="${requiredScopes}"${tokenSent ? ', error="invalid_token"' : ''}`;
 }
