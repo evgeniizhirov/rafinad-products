@@ -141,6 +141,7 @@ export function queryFeatures(p: URLSearchParams, viewer: Viewer, w: World, idx:
   filt('stage', (f, v) => f.stage_id === v);
   filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
   filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
+  filt('ids', (f, v) => f.id === v); // drill-down from analytics: the server still applies all ACL rules
   filt('assignee', (f, v) => (v === 'none' ? !f.assignee_name : (f.assignee_name ?? '').toLowerCase() === v.toLowerCase()));
   if (p.get('focus') === '1') rows = rows.filter((f) => bool(f.is_focus));
   if (viewer !== 'guest') filt('initiator', (f, v) => matchesInitiator(f, w, v));

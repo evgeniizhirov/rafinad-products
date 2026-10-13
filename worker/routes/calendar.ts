@@ -7,6 +7,7 @@ import { sha256Hex } from '../lib/crypto';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import { canSee, featureDto, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, viewerOf, visibleFeatures, type Indexes, type Viewer, type World } from '../lib/world';
+import { budgetImpact } from './budget';
 import { resolveFeature, sortFeatures } from './features';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД');
@@ -69,6 +70,8 @@ const scheduleSchema = z.object({
   planned_production_date: isoDate.nullable().optional(),
   version: z.number().int(),
   confirm_approved_change: z.boolean().optional(),
+  /** FR-05: entering a sprint over the monthly budget / capacity needs an explicit confirmation with a reason */
+  confirm_over_budget: z.boolean().optional(),
   reason: z.string().trim().max(500).optional(),
 });
 
@@ -242,6 +245,7 @@ export function registerCalendarRoutes(r: Router) {
     const st = [guardVersion(db, 'features', f.id, b.version)];
     const now = nowIso();
     const patch: Row = { sprint_id: b.sprint_id };
+    let overBudget: unknown[] = [];
 
     if (!plannable) {
       // bug / operational improvement: the sprint is a reference only — no release, no plan, no production date change
@@ -254,6 +258,12 @@ export function registerCalendarRoutes(r: Router) {
       } else if (b.release_id !== undefined) {
         targetRelease = b.release_id ? await first(db, 'SELECT * FROM releases WHERE id = ?', b.release_id) : null;
         if (b.release_id && !targetRelease) throw badRequest('Релиз не найден');
+      }
+      if (sprint && sprint.id !== f.sprint_id) {
+        const over = await budgetImpact(ctx, f.id, sprint.id);
+        if (over.length && !b.confirm_over_budget) throw conflict('over_budget', 'Месячный бюджет или ёмкость команд будут превышены. Подтвердите с указанием причины.', { over });
+        if (over.length && !b.reason) throw badRequest('Укажите причину превышения бюджета или ёмкости');
+        if (over.length) overBudget = over;
       }
       const releaseChanges = (curRelease?.id ?? null) !== (targetRelease?.id ?? null);
       if (releaseChanges && (curRelease?.approved_at || targetRelease?.approved_at)) {
@@ -287,7 +297,8 @@ export function registerCalendarRoutes(r: Router) {
     st.push(stmt(db, `UPDATE features SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?`,
       ...cols.map((c) => patch[c] ?? null), now, user.id, f.id));
     const moved = !!f.sprint_id && !!b.sprint_id && f.sprint_id !== b.sprint_id;
-    st.push(auditStmt(db, user, 'feature', f.id, moved ? 'rescheduled' : 'scheduled', changes, b.reason ?? null, false));
+    if (overBudget.length) changes.push({ field: 'over_budget', old: null, new: overBudget });
+    st.push(auditStmt(db, user, 'feature', f.id, moved ? 'rescheduled' : 'scheduled', changes, b.reason ?? null, overBudget.length > 0));
     await tx(db, st, 'Карточку изменил другой пользователь. Обновите данные.');
     return json({ ok: true, version: f.version + 1 });
   });
