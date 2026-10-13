@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CubeMark } from '../icons';
 import { api, invalidate, navigate, ROLE_LABEL, toast, useApi, useApp } from '../lib';
 import { ErrorBox, Field, Notice, PageHead } from '../ui';
+import { MyApiKeys } from './ApiKeys';
 
 function Brand() {
   return (
@@ -136,6 +137,7 @@ export function Account() {
           </div>
         </form>
       </div>
+      {!me.must_change_password && <MyApiKeys />}
     </>
   );
 }
