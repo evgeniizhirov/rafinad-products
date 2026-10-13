@@ -13,6 +13,7 @@ export const I = {
   offers: (p: any) => <S {...p}><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><circle cx="7.5" cy="7.5" r="1.5" /></S>,
   priorities: (p: any) => <S {...p}><rect x="3" y="14" width="5" height="7" rx="1" /><rect x="10" y="9" width="5" height="12" rx="1" /><rect x="17" y="4" width="5" height="17" rx="1" /></S>,
   roadmap: (p: any) => <S {...p}><path d="M3 6h7M3 12h12M3 18h5" /><path d="M14 6h7M19 12h2M12 18h9" /></S>,
+  analytics: (p: any) => <S {...p}><path d="M3 21h18" /><rect x="5" y="11" width="3" height="7" rx=".8" /><rect x="10.5" y="6" width="3" height="12" rx=".8" /><rect x="16" y="13" width="3" height="5" rx=".8" /></S>,
   calendar: (p: any) => <S {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></S>,
   releases: (p: any) => <S {...p}><path d="M5 21V4" /><path d="M5 4h11l-2 4 2 4H5" /></S>,
   sync: (p: any) => <S {...p}><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" /><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8" /><path d="M21 3v5h-5M3 21v-5h5" /></S>,

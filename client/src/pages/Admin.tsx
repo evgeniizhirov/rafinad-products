@@ -1,10 +1,11 @@
 import { AdminApiKeys } from './ApiKeys';
+import { TeamRates } from './TeamRates';
 import { useState } from 'react';
 import { I } from '../icons';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, ROLE_LABEL, toast, useApi, useApp, useQueryParam } from '../lib';
 import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs, useDirty } from '../ui';
 
-type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit' | 'apikeys';
+type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit' | 'apikeys' | 'rates';
 
 export function Admin() {
   const { me } = useApp();
@@ -28,6 +29,7 @@ export function Admin() {
           { id: 'stages', label: 'Этапы' },
           { id: 'settings', label: 'Публикация' },
           { id: 'apikeys', label: 'API-ключи' },
+          { id: 'rates', label: 'Ставки команд' },
           { id: 'audit', label: 'Журнал' },
         ]}
       />
@@ -35,6 +37,7 @@ export function Admin() {
       {tab === 'settings' && <Settings />}
       {tab === 'audit' && <Audit />}
       {tab === 'apikeys' && <AdminApiKeys />}
+      {tab === 'rates' && <TeamRates />}
       {!['users', 'settings', 'audit'].includes(tab) && <Dictionary kind={tab as DictKind} />}
     </>
   );
@@ -312,7 +315,34 @@ function Settings() {
             {[1, 2, 3, 4, 5, 6, 8, 12].map((n) => <option key={n}>{n}</option>)}
           </select>
         </div>
+        <ExportSettings save={save} />
         <p className="small muted">Гости видят только опубликованные карточки, эпики, офферы и релизы. Черновики, внутренние комментарии, приватные заметки, email сотрудников, настройки интеграций и история изменений в публичный API не попадают.</p>
+      </div>
+    </div>
+  );
+}
+
+/** FR-08: the only spreadsheet the export may write to and who may write there */
+function ExportSettings({ save }: { save: (patch: Record<string, unknown>) => Promise<void> }) {
+  const cfg = useApi<any>('/exports/config');
+  const [sheet, setSheet] = useState('');
+  return (
+    <div className="stack tight" style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+      <b>Экспорт задач в Google-таблицу</b>
+      <p className="small muted" style={{ margin: 0 }}>Экспорт пишет только во вкладку «Import» указанной таблицы и не трогает другие вкладки. Откройте таблицу сервисному аккаунту с ролью «Редактор» и создайте вкладку «Import».</p>
+      <div className="row wrap">
+        <input className="input" style={{ maxWidth: 520 }} placeholder={cfg.data?.google?.url ?? 'Ссылка на таблицу для экспорта'} value={sheet} onChange={(e) => setSheet(e.target.value)} />
+        <button className="btn sm" disabled={!sheet.trim()} onClick={async () => { await save({ export_google_spreadsheet_id: sheet }); setSheet(''); cfg.reload?.(); }}>Сохранить</button>
+        {cfg.data?.google?.configured && <button className="btn ghost sm" onClick={() => save({ export_google_spreadsheet_id: '' })}>Отключить</button>}
+      </div>
+      {cfg.data?.google?.url && <a className="small" style={{ color: 'var(--info)' }} href={cfg.data.google.url} target="_blank" rel="noopener noreferrer">Текущая таблица экспорта</a>}
+      <div className="row wrap small">
+        Выгружать в Google могут:
+        <select className="select sm" style={{ width: 'auto' }} value={cfg.data?.roles ?? 'product,admin'} onChange={async (e) => { await save({ export_google_roles: e.target.value.split(',') }); cfg.reload?.(); }} aria-label="Кто выгружает">
+          <option value="admin">только администраторы</option>
+          <option value="product,admin">продукт и администраторы</option>
+          <option value="department_lead,product,admin">все сотрудники</option>
+        </select>
       </div>
     </div>
   );
@@ -323,7 +353,7 @@ function Audit() {
   const [type, setType] = useState('');
   const [before, setBefore] = useState<number | null>(null);
   const { data, error } = useApi<any>(`/admin/audit?${new URLSearchParams({ ...(type ? { entity_type: type } : {}), ...(before ? { before: String(before) } : {}) })}`);
-  const types = ['feature', 'vote', 'estimate', 'placement', 'relation', 'epic', 'offer', 'release', 'capacity', 'plan', 'import', 'import_source', 'user', 'departments', 'teams', 'periods', 'settings'];
+  const types = ['feature', 'vote', 'estimate', 'placement', 'relation', 'epic', 'offer', 'release', 'capacity', 'plan', 'import', 'import_source', 'export', 'api_key', 'sprint', 'calendar', 'user', 'departments', 'teams', 'periods', 'settings'];
   return (
     <div className="stack">
       <div className="toolbar">

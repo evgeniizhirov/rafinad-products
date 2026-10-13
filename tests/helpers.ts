@@ -14,6 +14,8 @@ export interface TestApp {
   env: Env;
   db: ReturnType<typeof createD1>;
   call(method: string, path: string, body?: unknown, cookie?: string | null, headers?: Record<string, string>): Promise<Res>;
+  /** the raw Response (binary downloads) */
+  raw(method: string, path: string, body?: unknown, cookie?: string | null, headers?: Record<string, string>): Promise<Response>;
   login(email: string, password?: string): Promise<string>;
   user(email: string, role: 'admin' | 'product' | 'department_lead', departments?: string[], name?: string): Promise<string>;
   one(sql: string, ...params: unknown[]): any;
@@ -29,6 +31,16 @@ export async function setup(opts: { seed?: boolean } = {}): Promise<TestApp> {
   if (opts.seed !== false) for (const s of seedSql()) db.raw.exec(s);
   const env: Env = { DB: db, COOKIE_SECURE: '0' };
   fastHash ??= await hashPassword(PASSWORD, 1000); // tests use the minimum accepted iteration count
+
+  const raw: TestApp['raw'] = async (method, path, body, cookie, headers = {}) => {
+    const init: RequestInit = { method, headers: { ...headers } };
+    if (body !== undefined) {
+      (init.headers as Record<string, string>)['content-type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    if (cookie) (init.headers as Record<string, string>).cookie = cookie;
+    return worker.fetch(new Request(`http://app.test${path}`, init), env);
+  };
 
   const call: TestApp['call'] = async (method, path, body, cookie, headers = {}) => {
     const init: RequestInit = { method, headers: { ...headers } };
@@ -68,6 +80,7 @@ export async function setup(opts: { seed?: boolean } = {}): Promise<TestApp> {
     env,
     db,
     call,
+    raw,
     login,
     user,
     one: (sql, ...p) => db.raw.prepare(sql).get(...(p as never[])),

@@ -1,5 +1,6 @@
-// Google Sheets read-only client for Workers (service-account JWT signed with WebCrypto).
-// Only the `spreadsheets.readonly` scope is ever requested.
+// Google Sheets client for Workers (service-account JWT signed with WebCrypto).
+// Import uses only `spreadsheets.readonly`. The manual export (FR-08) requests the write scope separately,
+// and writes only to the «Import» tab of the spreadsheet configured by an administrator.
 
 import type { Env } from '../env';
 import { parseCsv } from '../domain/csv';
@@ -7,6 +8,7 @@ import { b64url } from './crypto';
 import { HttpError } from './http';
 
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const enc = new TextEncoder();
 
 interface ServiceAccount {
@@ -34,14 +36,15 @@ function pemToPkcs8(pem: string): ArrayBuffer {
   return out.buffer;
 }
 
-let tokenCache: { token: string; exp: number; email: string } | null = null;
+const tokenCache = new Map<string, { token: string; exp: number; email: string }>();
 
-async function accessToken(env: Env, sa: ServiceAccount): Promise<string> {
-  if (tokenCache && tokenCache.email === sa.client_email && tokenCache.exp > Date.now() + 60_000) return tokenCache.token;
+async function accessToken(env: Env, sa: ServiceAccount, scope = SCOPE): Promise<string> {
+  const cached = tokenCache.get(scope);
+  if (cached && cached.email === sa.client_email && cached.exp > Date.now() + 60_000) return cached.token;
   const iat = Math.floor(Date.now() / 1000);
   const aud = sa.token_uri || 'https://oauth2.googleapis.com/token';
   const header = b64url(enc.encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
-  const claims = b64url(enc.encode(JSON.stringify({ iss: sa.client_email, scope: SCOPE, aud, iat, exp: iat + 3600 })));
+  const claims = b64url(enc.encode(JSON.stringify({ iss: sa.client_email, scope, aud, iat, exp: iat + 3600 })));
   const key = await crypto.subtle.importKey('pkcs8', pemToPkcs8(sa.private_key), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(`${header}.${claims}`));
   const jwt = `${header}.${claims}.${b64url(sig)}`;
@@ -53,7 +56,7 @@ async function accessToken(env: Env, sa: ServiceAccount): Promise<string> {
   });
   if (!res.ok) throw new HttpError(502, 'google_auth', `Google отклонил ключ сервисного аккаунта (HTTP ${res.status})`);
   const data = (await res.json()) as { access_token: string; expires_in: number };
-  tokenCache = { token: data.access_token, exp: Date.now() + data.expires_in * 1000, email: sa.client_email };
+  tokenCache.set(scope, { token: data.access_token, exp: Date.now() + data.expires_in * 1000, email: sa.client_email });
   return data.access_token;
 }
 
@@ -135,4 +138,54 @@ export async function fetchSpreadsheet(env: Env, spreadsheetId: string, sheetNam
     data[name] = rows;
   }
   return { title: null, available, data, mode: 'public_link' };
+}
+
+
+export const EXPORT_SHEET = 'Import';
+
+/**
+ * Replaces the content of the «Import» tab in ONE spreadsheets.batchUpdate (atomic on Google's side):
+ * clear the tab, then write the rows. Other tabs are never addressed. Values are written as literal
+ * strings / numbers (userEnteredValue.stringValue), so nothing is interpreted as a formula.
+ */
+export async function writeImportTab(env: Env, spreadsheetId: string, rows: (string | number | null | undefined)[][]): Promise<{ sheetTitle: string }> {
+  const sa = serviceAccount(env);
+  if (!sa) throw new HttpError(400, 'no_service_account', 'Сервисный аккаунт Google не настроен (секрет GOOGLE_SERVICE_ACCOUNT_JSON)');
+  const token = await accessToken(env, sa, WRITE_SCOPE);
+  const doFetch = env.__FETCH ?? fetch;
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const meta = await doFetch(`${base}?fields=sheets.properties(sheetId,title,gridProperties)`, { headers: { authorization: `Bearer ${token}` } });
+  if (meta.status === 403 || meta.status === 404) {
+    throw new HttpError(400, 'google_no_access', `Нет доступа к таблице экспорта. Откройте её сервисному аккаунту ${sa.client_email} с ролью «Редактор».`);
+  }
+  if (!meta.ok) throw new HttpError(502, 'google_unavailable', `Google Sheets ответил HTTP ${meta.status}. Таблица не изменена.`);
+  const info = (await meta.json()) as { sheets?: { properties: { sheetId: number; title: string; gridProperties?: { rowCount?: number; columnCount?: number } } }[] };
+  const tab = (info.sheets ?? []).find((x) => x.properties.title === EXPORT_SHEET);
+  if (!tab) throw new HttpError(400, 'google_no_import_tab', `В таблице нет вкладки «${EXPORT_SHEET}». Создайте её — другие вкладки экспорт не трогает.`);
+  const sheetId = tab.properties.sheetId;
+  const width = Math.max(1, ...rows.map((r) => r.length));
+  const needRows = rows.length + 1;
+  const grid = tab.properties.gridProperties ?? {};
+  const requests: unknown[] = [];
+  if ((grid.rowCount ?? 0) < needRows || (grid.columnCount ?? 0) < width) {
+    requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: Math.max(grid.rowCount ?? 0, needRows), columnCount: Math.max(grid.columnCount ?? 0, width) } }, fields: 'gridProperties(rowCount,columnCount)' } });
+  }
+  requests.push({ updateCells: { range: { sheetId }, fields: 'userEnteredValue' } }); // clear the whole tab
+  requests.push({
+    updateCells: {
+      start: { sheetId, rowIndex: 0, columnIndex: 0 },
+      fields: 'userEnteredValue',
+      rows: rows.map((r) => ({
+        values: r.map((v) => (v === null || v === undefined || v === '' ? {} : typeof v === 'number' ? { userEnteredValue: { numberValue: v } } : { userEnteredValue: { stringValue: String(v) } })),
+      })),
+    },
+  });
+  const res = await doFetch(`${base}:batchUpdate`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ requests }),
+  });
+  if (res.status === 403) throw new HttpError(400, 'google_no_access', `Сервисному аккаунту ${sa.client_email} нужна роль «Редактор» в таблице экспорта.`);
+  if (!res.ok) throw new HttpError(502, 'google_write_failed', `Google Sheets не принял данные (HTTP ${res.status}). Изменение отменено целиком.`);
+  return { sheetTitle: EXPORT_SHEET };
 }

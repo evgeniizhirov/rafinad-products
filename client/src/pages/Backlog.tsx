@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { FeatureCard, FeatureForm, FeatureTitle } from '../features';
 import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useDict, useLocation } from '../lib';
+import { ExportDialog } from './ExportDialog';
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
 const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
@@ -17,6 +18,7 @@ export function Backlog() {
   const [q, setQ] = useState(params.get('q') ?? '');
   const dq = useDebounced(q, 250);
   const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const view = (params.get('view') as 'table' | 'board') ?? 'table';
   const setParam = (k: string, v: string | null) => {
     const p = new URLSearchParams(location.search);
@@ -29,7 +31,7 @@ export function Backlog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq]);
   const apiQs = new URLSearchParams();
-  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus']) {
+  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus', 'ids']) {
     const v = params.get(k);
     if (v) apiQs.set(k, v);
   }
@@ -39,7 +41,7 @@ export function Backlog() {
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
-  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus'].filter((k) => params.get(k)).length;
+  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus', 'ids'].filter((k) => params.get(k)).length;
   const sprints = useApi<any>(params.get('sprint') ? '/sprints' : null);
   // quick filters coming from the overview tiles / tags (not represented by the selects)
   const statusParam = params.get('status');
@@ -50,6 +52,7 @@ export function Backlog() {
     ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
     ...(params.get('sprint') ? [{ key: 'sprint', label: `Спринт ${params.get('sprint') === 'none' ? 'не указан' : (sprints.data?.sprints ?? []).find((s: any) => s.id === params.get('sprint'))?.code ?? ''}` }] : []),
     ...(params.get('focus') === '1' ? [{ key: 'focus', label: 'Фокусные задачи' }] : []),
+    ...(params.get('ids') ? [{ key: 'ids', label: `Из аналитики: ${params.get('ids')!.split(',').filter(Boolean).length} задач` }] : []),
     ...(params.get('initiator') && !params.get('initiator')!.startsWith('department:') && params.get('initiator') !== 'none' ? [{ key: 'initiator', label: `Инициатор: ${params.get('initiator')!.replace(/^(text|user):/, '')}` }] : []),
   ];
 
@@ -65,6 +68,7 @@ export function Backlog() {
     <>
       <PageHead title="Бэклог" sub="Все известные продуктовые доработки с приоритетами отделов, оценками и планом.">
         <Seg value={view} onChange={(v) => setParam('view', v === 'table' ? null : v)} items={[{ id: 'table', label: <I.table />, title: 'Таблица' }, { id: 'board', label: <I.board />, title: 'Канбан по статусам' }]} />
+        {meta.viewer !== 'guest' && <button className="btn" onClick={() => setExporting(true)} title="Excel или Google-таблица, по текущим фильтрам">Экспорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setCreating(true)}><I.plus />Новая задача</button>}
       </PageHead>
       <GuestNote />
@@ -155,6 +159,7 @@ export function Backlog() {
         </div>
       )}
       {data && view === 'board' && <Board features={data.features} canEdit={canEdit} />}
+      {exporting && <ExportDialog query={apiQs.toString()} onClose={() => setExporting(false)} />}
       {creating && <FeatureForm onClose={() => setCreating(false)} />}
     </>
   );
