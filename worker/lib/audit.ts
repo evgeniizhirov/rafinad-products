@@ -10,7 +10,7 @@ export interface Change {
 
 export function auditStmt(
   db: D1Database,
-  actor: Pick<SessionUser, 'id' | 'name'> | null,
+  actor: (Pick<SessionUser, 'id' | 'name'> & { apiKey?: { id: string } }) | null,
   entityType: string,
   entityId: string,
   action: string,
@@ -20,8 +20,8 @@ export function auditStmt(
 ) {
   return stmt(
     db,
-    `INSERT INTO audit_log (at, actor_id, actor_name, entity_type, entity_id, action, changes, reason, is_override)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO audit_log (at, actor_id, actor_name, entity_type, entity_id, action, changes, reason, is_override, api_key_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     nowIso(),
     actor?.id ?? null,
     actor?.name ?? 'Система',
@@ -31,6 +31,7 @@ export function auditStmt(
     changes && changes.length ? JSON.stringify(changes) : null,
     reason ?? null,
     isOverride ? 1 : 0,
+    actor?.apiKey?.id ?? null,
   );
 }
 

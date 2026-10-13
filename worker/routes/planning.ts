@@ -7,7 +7,7 @@ import { auditStmt } from '../lib/audit';
 import { sha256Hex } from '../lib/crypto';
 import { all, bool, first, newId, nowIso, parseJson, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
-import { indexWorld, loadWorld, viewerOf, type Indexes, type World } from '../lib/world';
+import { indexWorld, isPlannable, loadWorld, viewerOf, type Indexes, type World } from '../lib/world';
 
 export function activePeriods(w: World) {
   return sortPeriods(w.periods.filter((p) => bool(p.is_active)).map((p) => ({ id: p.id, name: p.name, startDate: p.start_date, endDate: p.end_date })));
@@ -30,7 +30,7 @@ export function currentLoad(w: World, idx: Indexes) {
   const periods = activePeriods(w);
   const teams = w.teams.filter((t) => bool(t.is_active)).map((t) => ({ id: t.id, name: t.name }));
   const features = w.features
-    .filter((f) => !f.merged_into_id && f.period_id && idx.status.get(f.status_id)?.semantic !== 'cancelled')
+    .filter((f) => !f.merged_into_id && isPlannable(f) && f.period_id && idx.status.get(f.status_id)?.semantic !== 'cancelled')
     .map((f) => ({ id: f.id, periodId: f.period_id, estimates: estimatesOf(idx, f.id) }));
   return computeLoad(periods, teams, capacityMap(w), features);
 }
@@ -41,7 +41,7 @@ function plannerInput(w: World, idx: Indexes, params: { startPeriodId: string; h
     return !!(rid && idx.release.get(rid)?.approved_at);
   };
   const features: PlannerFeature[] = w.features
-    .filter((f) => !f.merged_into_id)
+    .filter((f) => !f.merged_into_id && isPlannable(f))
     .map((f) => {
       const pr = idx.priority.get(f.id)!;
       const st = idx.status.get(f.status_id);
@@ -51,8 +51,9 @@ function plannerInput(w: World, idx: Indexes, params: { startPeriodId: string; h
         score: pr.score, productScore: pr.productScore, createdAt: f.created_at,
       };
     });
+  const plannable = new Set(features.map((f) => f.id));
   const blocks = w.relations
-    .filter((r) => r.type === 'blocks' && !idx.feature.get(r.from_id)?.merged_into_id && !idx.feature.get(r.to_id)?.merged_into_id)
+    .filter((r) => r.type === 'blocks' && plannable.has(r.from_id) && plannable.has(r.to_id))
     .map((r) => [r.from_id, r.to_id] as [string, string]);
   return {
     periods: activePeriods(w),
@@ -100,7 +101,7 @@ function runDto(run: Row, w: World, idx: Indexes) {
 export function registerPlanningRoutes(r: Router) {
   r.get('/api/planning', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     if (viewer === 'guest' && w.settings.public_show_capacity !== '1') throw forbidden('Ресурсный план доступен сотрудникам');
     const idx = indexWorld(w);
     const alerts = viewer === 'guest' ? [] : await all(ctx.env.DB, 'SELECT * FROM plan_alerts WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT 100');
@@ -144,7 +145,7 @@ export function registerPlanningRoutes(r: Router) {
   r.post('/api/planning/propose', async (ctx) => {
     const user = requirePerm(ctx, perms.plan);
     const b = await readJson(ctx, z.object({ start_period_id: z.string().optional(), horizon: z.number().int().min(1).max(24).optional() }));
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, 'editor');
     const idx = indexWorld(w);
     const start = b.start_period_id ?? currentPeriodId(w);
     if (!start) throw badRequest('Нет активных плановых периодов — добавьте их в администрировании');
@@ -153,7 +154,7 @@ export function registerPlanningRoutes(r: Router) {
     const input = plannerInput(w, idx, params);
     const result = buildPlan(input);
     const hash = await inputHash(input);
-    const versions = Object.fromEntries(w.features.filter((f) => !f.merged_into_id).map((f) => [f.id, f.version]));
+    const versions = Object.fromEntries(w.features.filter((f) => !f.merged_into_id && isPlannable(f)).map((f) => [f.id, f.version]));
     const id = newId('plan');
     const db = ctx.env.DB;
     await tx(db, [
@@ -168,7 +169,7 @@ export function registerPlanningRoutes(r: Router) {
 
   r.get('/api/planning/runs/:id', async (ctx) => {
     requirePerm(ctx, perms.plan);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, 'editor');
     const run = await first(ctx.env.DB, 'SELECT * FROM plan_runs WHERE id = ?', ctx.params.id);
     if (!run) throw notFound('Расчёт не найден');
     return json({ run: runDto(run, w, indexWorld(w)) });
@@ -192,7 +193,7 @@ export function registerPlanningRoutes(r: Router) {
     const run = await first(db, 'SELECT * FROM plan_runs WHERE id = ?', ctx.params.id);
     if (!run) throw notFound('Расчёт не найден');
     if (run.status !== 'proposed') throw conflict('not_proposed', 'Этот расчёт уже утверждён или отменён');
-    const w = await loadWorld(db);
+    const w = await loadWorld(db, 'editor');
     const idx = indexWorld(w);
     const params = parseJson<Row>(run.params, {});
     const input = plannerInput(w, idx, { startPeriodId: params.startPeriodId, horizon: params.horizon });

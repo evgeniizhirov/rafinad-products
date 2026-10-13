@@ -1,10 +1,15 @@
 import type { Env } from './env';
-import { loadSessionUser } from './lib/auth';
+import { loadApiKeyUser, loadSessionUser, scopeFor } from './lib/auth';
 import { errorResponse, forbidden, HttpError, json, Router, type Ctx } from './lib/http';
 import { registerAdminRoutes } from './routes/admin';
+import { registerAnalyticsRoutes } from './routes/analytics';
+import { registerApiKeyRoutes } from './routes/apikeys';
 import { registerAuthRoutes } from './routes/auth';
+import { registerBudgetRoutes } from './routes/budget';
+import { registerCalendarRoutes } from './routes/calendar';
 import { registerCatalogRoutes } from './routes/catalog';
 import { registerDashboardRoutes } from './routes/dashboard';
+import { registerExportRoutes } from './routes/exports';
 import { registerFeatureRoutes } from './routes/features';
 import { registerImportRoutes } from './routes/imports';
 import { registerMergeRoutes } from './routes/merge';
@@ -20,9 +25,14 @@ registerMergeRoutes(router);
 registerPriorityRoutes(router);
 registerCatalogRoutes(router);
 registerReleaseRoutes(router);
+registerCalendarRoutes(router);
+registerBudgetRoutes(router);
 registerPlanningRoutes(router);
 registerImportRoutes(router);
 registerAdminRoutes(router);
+registerApiKeyRoutes(router);
+registerExportRoutes(router);
+registerAnalyticsRoutes(router);
 
 const SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
@@ -54,7 +64,18 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     if (m === null) throw new HttpError(404, 'not_found', 'Неизвестный адрес API');
     if (m === 'method') throw new HttpError(405, 'method_not_allowed', 'Метод не поддерживается');
     ctx.params = m.params;
-    ctx.user = await loadSessionUser(env, req);
+    if (req.headers.get('authorization')) {
+      // personal API key (FR-01): the cookie is ignored, scope ∩ role is enforced here and in every route
+      const keyUser = await loadApiKeyUser(env, req);
+      if (keyUser === 'invalid') throw new HttpError(401, 'invalid_api_key', 'API-ключ недействителен, отозван или просрочен');
+      if (keyUser === 'rate_limited') throw new HttpError(429, 'rate_limited', 'Слишком много запросов по ключу: не больше 120 в минуту');
+      const scope = scopeFor(req.method, url.pathname);
+      if (!scope) throw forbidden('Это действие недоступно по API-ключу');
+      if (!keyUser!.apiKey!.scopes.includes(scope)) throw forbidden(`У ключа нет разрешения ${scope}`);
+      ctx.user = keyUser;
+    } else {
+      ctx.user = await loadSessionUser(env, req);
+    }
     const out = await m.handler(ctx);
     const res = out instanceof Response ? out : json(out);
     return withHeaders(res, {}, ctx.setCookies);
