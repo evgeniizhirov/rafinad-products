@@ -102,3 +102,16 @@ test('write scopes are only advertised when server writes are enabled', async ()
   }
 });
 
+test('write-enabled OAuth challenge advertises both scopes for fresh connections', async () => {
+  for (const [enabled, requiredScopes] of [
+    ['true', 'roadmap:read roadmap:write'],
+    ['false', 'roadmap:read'],
+  ] as const) {
+    const response = await handle(new Request(env.MCP_RESOURCE, { method: 'POST' }), { ...env, ENABLE_WRITES: enabled });
+    assert.equal(response.status, 401);
+    const challenge = response.headers.get('www-authenticate')!;
+    assert.ok(challenge.includes(`scope="${requiredScopes}"`));
+    assert.ok(!challenge.includes('error="invalid_token"'), 'initial authorization must not claim a missing token was invalid');
+  }
+});
+
