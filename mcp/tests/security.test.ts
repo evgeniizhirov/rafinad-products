@@ -119,3 +119,51 @@ test('calendar chooses current sprint from backend and forwards closed-task filt
   assert.equal(result.value.features[0].key, 'RF-1');
   assert.deepEqual(paths, ['/api/calendar', '/api/sprints/spr_current', '/api/features?sprint=spr_current&hide_closed=1']);
 });
+
+test('production transport uses the Roadmap service binding with the API key', async () => {
+  const seen: Array<{ url: string; authorization: string | null; redirect: RequestRedirect | undefined }> = [];
+  const config = {
+    ...env,
+    ROADMAP_API: {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization'),
+          redirect: init?.redirect,
+        });
+        return Response.json({ user: { id: 'service-binding-user' } });
+      },
+    },
+  };
+  const bearer = await token();
+  // No deps.fetcher injection: this exercises the same path as the deployed Worker.
+  const response = await handle(new Request(env.MCP_RESOURCE, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${bearer}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2025-11-25',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'get_my_profile', arguments: {} },
+    }),
+  }), config, { keys });
+  assert.equal(response.status, 200, await response.clone().text());
+  const raw = await response.text();
+  const data = JSON.parse(raw.includes('data: ') ? raw.split('\n').find(line => line.startsWith('data: '))!.slice(6) : raw);
+  assert.deepEqual(data.result.structuredContent, { data: { user: { id: 'service-binding-user' } } });
+  assert.deepEqual(seen, [{
+    url: 'https://products-roadmap.ezhirov-es.workers.dev/api/auth/me',
+    authorization: `Bearer ${env.RAFINAD_API_KEY}`,
+    redirect: 'error',
+  }]);
+});
+
+test('missing Roadmap service binding fails closed, including during discovery', async () => {
+  const missing = { ...env, ROADMAP_API: undefined as unknown as typeof env.ROADMAP_API };
+  const response = await handle(new Request('https://mcp.test/.well-known/oauth-protected-resource/mcp'), missing);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'integration_not_configured' });
+});
