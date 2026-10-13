@@ -8,7 +8,7 @@
 
 Результат локального прогона: 14 MCP-тестов и 123 существующих теста Roadmap прошли; TypeScript обоих проектов и dry-run сборки прошли. Локальный workerd запущен; незаполненная конфигурация проверена HTTP-запросом и возвращает 503. Полный OAuth/REST путь проверен в процессе Node.js, а не на опубликованном Worker.
 
-На 13.10.2026 пользователь сообщил план **Plus**. Наличие Add custom MCP server/Developer mode и разрешение записи в конкретном аккаунте пока не подтверждены. Текущая [инструкция OpenAI](https://developers.openai.com/plugins/deploy/connect-chatgpt) описывает добавление сервера через Plugins и подчёркивает зависимость от политики аккаунта/workspace. Поэтому `ENABLE_WRITES="false"` по умолчанию. Нельзя обещать запись на основании одного названия тарифа.
+На 13.10.2026 пользователь сообщил план **Plus**. Наличие Add custom MCP server/Developer mode и разрешение записи в конкретном аккаунте пока не подтверждены. Текущая [инструкция OpenAI](https://developers.openai.com/plugins/deploy/connect-chatgpt) описывает добавление сервера через Plugins и подчёркивает зависимость от политики аккаунта/workspace. Режим записи включён для production MCP конфигурацией `ENABLE_WRITES="true"`; фактическая доступность зависит от OAuth scope `roadmap:write`, роли и scopes персонального ключа Roadmap, а также подтверждений в ChatGPT. Нельзя обещать запись на основании одного названия тарифа.
 
 **Развёрнуто (13.10):** Worker `rafinad-roadmap-mcp` опубликован, переменные OAuth (Auth0) и секрет заданы в Cloudflare. Сборка — Cloudflare Workers Builds из `main` (корень `/mcp`, `pnpm run build` = typecheck + тесты без backend + dry-run, затем `wrangler deploy --keep-vars`). Ранее раскрытый ключ не отозван автоматически — это должен сделать владелец.
 
@@ -59,6 +59,16 @@ Worker проверяет подпись ES256/RS256, `iss`, `aud`, `sub`, `exp`
 | API → Token Expiration | не больше `OAUTH_MAX_TOKEN_AGE_SECONDS` |
 
 ChatGPT при подключении сам находит Auth0 через `/.well-known/oauth-protected-resource/mcp`. В Regular Web Application должен быть разрешён callback URL, который показывает ChatGPT, а в запросе авторизации — `audience`/`resource`, равный `MCP_RESOURCE`, иначе Auth0 выдаст токен без нужного `aud`.
+
+## Включение записи (с 13.10.2026)
+
+В production конфигурации MCP Worker задано `ENABLE_WRITES="true"`. Это **не** означает автоматическое предоставление прав. JWT по-прежнему должен содержать оба разрешения `roadmap:read roadmap:write`, а соответствующая роль и персональный API-ключ Roadmap должны разрешать конкретную операцию. Если у токена только `roadmap:read`, MCP предоставляет лишь 9 инструментов чтения.
+
+Для выдачи scope со стороны Auth0: в **Applications → APIs** выберите API с идентификатором `MCP_RESOURCE` и добавьте разрешение `roadmap:write` рядом с `roadmap:read`; проверьте User-delegated Access и назначение нужному владельцу в соответствии с текущими настройками Auth0. После изменения запросите повторную авторизацию приложения в ChatGPT, чтобы выдать новый access token с запрошенным scope записи. Старые токены автоматически не получают новые права.
+
+При `roadmap:write` MCP объявляет пять инструментов: `create_task`, `update_task`, `set_task_priority`, `add_task_comment`, `schedule_task`. Перед каждым изменением ChatGPT обязан представить конкретные данные и получить явное подтверждение пользователя. Не выключайте подтверждения в настройках ChatGPT. Системная схема дополнительно требует `confirmed=true`, но это не заменяет подтверждение на стороне ChatGPT. Не выполняйте тестовый write-запрос на production без отдельного согласия.
+
+В интерфейсе **Plugins** повторно подключите Rafinad Roadmap, если после обновления OAuth scopes инструменты записи не появились. Проверяйте сначала `tools/list` и вызов `get_my_profile`, не создавая тестовых задач.
 
 ## Диагностика
 

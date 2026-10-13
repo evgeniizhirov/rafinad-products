@@ -88,3 +88,17 @@ test('discovery without bearer and CORS for ChatGPT only', async () => {
   assert.equal(unauth.headers.get('access-control-allow-origin'), 'https://chatgpt.com', 'the browser can read the 401 challenge');
   assert.match(unauth.headers.get('access-control-expose-headers')!, /www-authenticate/);
 });
+
+test('write scopes are only advertised when server writes are enabled', async () => {
+  const endpoint = 'https://mcp.test/.well-known/oauth-protected-resource/mcp';
+  for (const [enabled, expected] of [
+    ['true', ['roadmap:read', 'roadmap:write']],
+    ['false', ['roadmap:read']],
+  ] as const) {
+    const result = await handle(new Request(endpoint), { ...env, ENABLE_WRITES: enabled });
+    assert.equal(result.status, 200);
+    const metadata = await result.json() as { scopes_supported: string[] };
+    assert.deepEqual(metadata.scopes_supported, expected);
+  }
+});
+

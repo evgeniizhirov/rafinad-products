@@ -14,7 +14,7 @@
   ],
   "vars": {
     "MCP_RESOURCE": "https://rafinad-roadmap-mcp.ezhirov-es.workers.dev/mcp",
-    "ENABLE_WRITES": "false"
+    "ENABLE_WRITES": "true"
   }
   // Required before deployment: OAUTH_ISSUER, OAUTH_JWKS_URL, OAUTH_CLIENT_ID,
   // OWNER_SUBJECT. Secret: RAFINAD_API_KEY. Missing settings fail closed.
