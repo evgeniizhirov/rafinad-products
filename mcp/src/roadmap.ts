@@ -13,7 +13,7 @@ const messages: Record<number, string> = {
 const safeCodes = new Set(['version_conflict', 'over_budget', 'approved', 'merged', 'confirm_disclose', 'invalid_api_key', 'rate_limited']);
 
 export class Roadmap {
-  constructor(private key: string, private fetcher: Fetch) {}
+  constructor(private key: string, private fetcher: Fetch, private diagnostics = false) {}
   // Paths are constructed only by this adapter's callers; never accept a URL from a tool.
   async request(path: string, method = 'GET', body?: unknown): Promise<any> {
     if (!path.startsWith('/') || path.startsWith('//') || /[\\#]/.test(path)) throw new Error('Invalid API path');
@@ -26,7 +26,13 @@ export class Roadmap {
         headers: { authorization: `Bearer ${this.key}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-    } catch {
+    } catch (error) {
+      // Opt-in diagnostics only: never log request headers, JWTs, API keys, bodies, or stack traces.
+      if (this.diagnostics) {
+        const category = error instanceof Error ? error.name : 'UnknownError';
+        const detail = error instanceof Error ? this.sanitize(error.message).slice(0, 200) : '';
+        console.warn(JSON.stringify({ event: 'roadmap_transport_failed', category, detail }));
+      }
       throw new RoadmapError(502, 'unknown_result', 'Roadmap не ответил. Результат записи неизвестен: не повторяйте её автоматически, сначала проверьте данные.');
     }
     let data: any;
