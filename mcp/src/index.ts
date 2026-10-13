@@ -74,6 +74,7 @@ export async function handle(request: Request, env: Env, deps: { keys?: JWTVerif
     const handler = createMcpHandler(() => createServer(api, {
       writesEnabled: env.ENABLE_WRITES === 'true',
       tokenHasWriteScope: auth.scopes.includes('roadmap:write'),
+      resourceMetadataUrl: new URL('/.well-known/oauth-protected-resource/mcp', env.MCP_RESOURCE).href,
     }));
     const response = await handler.fetch(request);
     const headers = new Headers(response.headers);

@@ -74,6 +74,29 @@ ChatGPT при подключении сам находит Auth0 через `/.
 
 ## Диагностика
 
+### Восстановление сборки после PR #31
+
+На `3827cce` локально воспроизводится `AssertionError [ERR_ASSERTION]` в тесте
+`production transport uses the Roadmap service binding with the API key`:
+ожидание профиля не учитывало новое поле `mcp_access`. TypeScript проходил,
+но `test:ci` останавливал `build` до dry-run и публикации. Ожидание обновлено
+без удаления проверок Service Binding, API-ключа и `redirect: manual`.
+
+При `missing_write_scope` результат инструмента содержит статус 403 и
+`_meta["mcp/www_authenticate"]` с `insufficient_scope`, адресом metadata и
+`roadmap:read roadmap:write`, чтобы клиент мог запросить повторный OAuth.
+Установленный `@modelcontextprotocol/server@2.3.1` поддерживает `_meta` в
+`registerTool`, но не top-level `securitySchemes`; используется документированное
+совместимое `_meta.securitySchemes`, проверяемое через настоящий `tools/list`.
+См. [OpenAI authentication](https://developers.openai.com/plugins/build/auth) и
+[metadata reference](https://developers.openai.com/plugins/reference).
+Наличие каталога и аннотаций не гарантирует, что политика конкретного клиента
+разрешит запись: проверяйте обновлённое подключение отдельно.
+
+Версии карточек и голосов — положительные целые числа (в БД начальная версия 1).
+Нулевая, отрицательная, дробная или отсутствующая версия отклоняется схемой
+до REST; отсутствие голоса обозначается `expected_version: null`.
+
 `node mcp/scripts/diagnose.mjs` (или `pnpm diagnose` в `mcp`) проверяет опубликованный endpoint: discovery, 401 с `WWW-Authenticate`, CORS preflight от `https://chatgpt.com`. С переменной окружения `MCP_ACCESS_TOKEN` (только локально, не в Git/чате/истории shell) — ещё `initialize` и `tools/list`. Токен не печатается, redirect не выполняются.
 
 | Симптом | Что проверить |

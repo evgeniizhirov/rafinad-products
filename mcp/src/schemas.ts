@@ -1,6 +1,6 @@
 import * as z from 'zod';
 export const id = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/);
-export const version = z.number().int().nonnegative();
+export const version = z.number().int().positive();
 const date = z.iso.date();
 const text = z.string().max(300);
 export const filters = z.strictObject({

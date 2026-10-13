@@ -25,7 +25,7 @@ test('discovery, missing configuration, host and origin protection', async () =>
   assert.equal((await handle(new Request(env.MCP_RESOURCE, { headers: { origin: 'https://evil.test' } }), env)).status, 403);
 });
 
-test('MCP initialize and real tools/list; read-only switch AND OAuth scope hide all writes', async () => {
+test('MCP initialize and tools/list; server switch controls discovery independently of OAuth scope', async () => {
   for (const [settings, claims, count] of [[{}, {}, 14], [{ ENABLE_WRITES: 'false' }, {}, 9], [{}, { scope: 'roadmap:read' }, 14]] as const) {
     const h = await harness(async () => Response.json({}), settings, claims);
     const init = await h.rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'tests', version: '1' } });
@@ -79,6 +79,64 @@ test('authenticated profile reports write authorization without exposing JWT or 
     });
     assert.deepEqual(profile.value.user, { role: 'admin' });
     assert.ok(!JSON.stringify(profile.value).includes(env.RAFINAD_API_KEY));
+  }
+});
+
+const writeFixtures: Array<[string, Record<string, unknown>]> = [
+  ['create_task', { fields: { title: 'Mock task' } }],
+  ['update_task', { id: 'RF-1', version: 1, changes: { title: 'Mock update' } }],
+  ['set_task_priority', { id: 'RF-1', version: 1, department_id: 'dep_sales', score: 4, expected_version: null }],
+  ['add_task_comment', { id: 'RF-1', version: 1, body: 'Mock comment' }],
+  ['schedule_task', { id: 'RF-1', version: 1, sprint_id: null }],
+];
+
+test('every write requires scope and explicit confirmation before any REST request', async () => {
+  for (const scope of ['roadmap:read', 'roadmap:read roadmap:write']) {
+    let calls = 0;
+    const h = await harness(async () => { calls++; return Response.json({}); }, {}, { scope });
+    const list = (await h.rpc('tools/list')).result.tools;
+    for (const [name, args] of writeFixtures) {
+      const descriptor = list.find((tool: any) => tool.name === name);
+      assert.deepEqual(descriptor._meta.securitySchemes, [{ type: 'oauth2', scopes: ['roadmap:read', 'roadmap:write'] }]);
+      assert.equal(descriptor.annotations.readOnlyHint, false);
+      assert.equal(descriptor.annotations.destructiveHint, true);
+      assert.equal(descriptor.annotations.idempotentHint, false);
+      for (const confirmation of [{}, { confirmed: false }]) {
+        assert.equal((await h.call(name, { ...args, ...confirmation })).isError, true, name);
+      }
+      if (scope === 'roadmap:read') {
+        const result = await h.call(name, { ...args, confirmed: true });
+        assert.equal(result.value.status, 403, name);
+        assert.equal(result.value.code, 'missing_write_scope', name);
+        assert.match(result._meta['mcp/www_authenticate'][0], /error="insufficient_scope"/);
+        assert.match(result._meta['mcp/www_authenticate'][0], /resource_metadata="https:\/\/mcp.test\/\.well-known\/oauth-protected-resource\/mcp"/);
+      } else if (name !== 'create_task') {
+        for (const version of [undefined, 0, -1, 1.5, '1']) {
+          assert.equal((await h.call(name, { ...args, version, confirmed: true })).isError, true, name);
+        }
+      }
+    }
+    assert.equal(calls, 0);
+  }
+});
+
+test('all five confirmed writes succeed with scopes; uncertain writes are never retried', async () => {
+  for (const failWrite of [false, true]) for (const [name, args] of writeFixtures) {
+    let writes = 0;
+    const h = await harness(async (url, init) => {
+      if (init?.method !== 'GET') {
+        writes++;
+        if (failWrite) throw new Error('Mock network failure');
+        return Response.json({ ok: true });
+      }
+      return Response.json(String(url).endsWith('/auth/me')
+        ? { user: { department_ids: ['dep_sales'] } }
+        : { feature: { version: 1, votes: [] } });
+    });
+    const result = await h.call(name, { ...args, confirmed: true });
+    assert.equal(writes, 1, name);
+    if (failWrite) assert.equal(result.value.code, 'unknown_result', name);
+    else assert.equal(result.value.ok, true, name);
   }
 });
 
@@ -218,7 +276,10 @@ test('production transport uses the Roadmap service binding with the API key', a
   assert.equal(response.status, 200, await response.clone().text());
   const raw = await response.text();
   const data = JSON.parse(raw.includes('data: ') ? raw.split('\n').find(line => line.startsWith('data: '))!.slice(6) : raw);
-  assert.deepEqual(data.result.structuredContent, { data: { user: { id: 'service-binding-user' } } });
+  assert.deepEqual(data.result.structuredContent, { data: {
+    user: { id: 'service-binding-user' },
+    mcp_access: { writes_enabled: true, token_has_write_scope: true, can_write: true },
+  } });
   assert.deepEqual(seen, [{
     url: 'https://products-roadmap.ezhirov-es.workers.dev/api/auth/me',
     authorization: `Bearer ${env.RAFINAD_API_KEY}`,
