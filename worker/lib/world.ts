@@ -269,6 +269,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     period: period ? { id: period.id, name: period.name, start_date: period.start_date, end_date: period.end_date } : null,
     sprint: sprintRef(f.sprint_id ? idx.sprint.get(f.sprint_id) : undefined, viewer, idx),
     planned_production_date: f.planned_production_date ?? null,
+    urgency: f.urgency ?? null,
     is_focus: bool(f.is_focus),
     placement_locked: bool(f.placement_locked),
     release: release && canSee(viewer, release.visibility)
@@ -289,6 +290,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
   dto.task_kind = f.task_kind ?? 'planned';
   if (viewer !== 'guest') {
     dto.baseline_production_date = f.baseline_production_date ?? null;
+    dto.fact_hours = f.fact_hours ?? null;
     dto.is_product_internal = isProductInternal(f);
     dto.initiator = initiatorDto(f, w);
     dto.external_ref = f.external_ref;

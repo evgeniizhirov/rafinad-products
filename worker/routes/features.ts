@@ -33,6 +33,9 @@ const featureFields = {
   task_kind: z.enum(TASK_KINDS).optional(),
   /** release commitment to the business (FR-03); only for planned tasks */
   is_focus: z.boolean().optional(),
+  /** bugs / operational improvements: urgency (never a department vote) and actual hours after the fix */
+  urgency: z.enum(['low', 'medium', 'high', 'critical']).nullable().optional(),
+  fact_hours: z.number().min(0).max(100000).nullable().optional(),
   is_product_internal: z.boolean().optional(),
   /** null clears the initiator */
   initiator: z.discriminatedUnion('type', [
@@ -220,12 +223,12 @@ export function registerFeatureRoutes(r: Router) {
       const statements = [
         stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, author_name, assignee_name,
             requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by,
-            task_kind, is_product_internal, initiator_type, initiator_user_id, initiator_department_id, initiator_name, is_focus)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            task_kind, is_product_internal, initiator_type, initiator_user_id, initiator_department_id, initiator_name, is_focus, urgency, fact_hours)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id, num, b.external_ref ?? null, b.title, b.description ?? '', b.category_id ?? null, b.epic_id ?? null, statusId, b.stage_id ?? null,
           b.author_name ?? user.name, b.assignee_name ?? null, b.requested_at ?? now.slice(0, 10), b.planned_start ?? null, b.planned_end ?? null,
           sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id,
-          kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0),
+          kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0, b.urgency ?? null, b.fact_hours ?? null),
         ...[...new Set(b.tags ?? [])].map((t) => stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', id, t)),
         ...[...new Set(b.offer_ids ?? [])].map((o) => stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', id, o, now, user.id)),
         ...Object.entries(b.estimates ?? {}).map(([t, h]) => stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?)', id, t, h, now, user.id)),
@@ -263,6 +266,8 @@ export function registerFeatureRoutes(r: Router) {
       if (is_focus) throw badRequest('Фокусной может быть только плановая общая задача');
       patch.is_focus = 0; // a task that stops being a planned commitment loses the focus mark
     }
+    // bug → planned task: its sprint was only a reference, it must not silently become a sprint commitment
+    if (fields.task_kind === 'planned' && (f.task_kind ?? 'planned') !== 'planned' && f.sprint_id) patch.sprint_id = null;
     if (is_product_internal !== undefined) patch.is_product_internal = is_product_internal ? 1 : 0;
     const wasInternal = isProductInternal(f);
     if (wasInternal && patch.is_product_internal === 0 && !confirm_disclose) {

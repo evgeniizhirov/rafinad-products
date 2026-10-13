@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
-import { FeatureForm, FeaturePicker, KIND_LABEL, usePlacement, VoteControl } from '../features';
+import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
 
@@ -84,19 +84,28 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
 function About({ f }: { f: any }) {
   const { me } = useApp();
   const [comment, setComment] = useState('');
+  const canEditCard = !!me?.permissions.edit_catalog && !me.must_change_password;
   return (
     <div className="stack loose">
       <RichText text={f.description} />
       <dl className="dl">
-        <dt>Приоритет</dt>
-        <dd><Cubes score={f.priority.score} /> <span className="muted small">{f.priority.voters ? `оценили ${f.priority.voters}` : 'отделы ещё не голосовали'}</span></dd>
+        {(f.task_kind ?? 'planned') === 'planned' && (
+          <>
+            <dt>Приоритет</dt>
+            <dd><Cubes score={f.priority.score} /> <span className="muted small">{f.priority.voters ? `оценили ${f.priority.voters}` : 'отделы ещё не голосовали'}</span></dd>
+          </>
+        )}
         <dt>Эпик</dt>
         <dd>{f.epic ? (f.epic.hidden ? <span className="muted">Внутренний эпик</span> : f.epic.title) : <span className="muted">Без эпика</span>}</dd>
         <dt>Категория</dt>
         <dd>{f.category?.name ?? <span className="muted">—</span>}</dd>
         {f.tags.length > 0 && (<><dt>Теги</dt><dd className="row wrap">{f.tags.map((t: string) => <span key={t} className="tag">{t}</span>)}</dd></>)}
-        <dt>Плановый период</dt>
-        <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
+        {((f.task_kind ?? 'planned') === 'planned' || f.period) && (
+          <>
+            <dt>Плановый период</dt>
+            <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
+          </>
+        )}
         <dt>Релиз → спринт</dt>
         <dd>
           {f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}
@@ -105,7 +114,23 @@ function About({ f }: { f: any }) {
         </dd>
         {f.task_kind === 'planned' && (<><dt>Плановая выкладка</dt><dd>{f.planned_production_date ? fmtDate(f.planned_production_date) : <span className="muted">—</span>}{f.baseline_production_date && f.baseline_production_date !== f.planned_production_date && <span className="muted small"> (обещали {fmtDate(f.baseline_production_date)})</span>}</dd></>)}
         <dt>Тип работы</dt>
-        <dd>{KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}</dd>
+        <dd>
+          {KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}
+          {f.task_kind && f.task_kind !== 'planned' && canEditCard && (
+            <button className="btn ghost sm" style={{ marginLeft: 6 }} onClick={async () => {
+              if (!window.confirm('Перевести в плановую задачу? Она начнёт участвовать в планировании, оценках и релизах; справочный спринт будет снят.')) return;
+              await mutate(`/features/${f.id}`, 'PATCH', { task_kind: 'planned', version: f.version }, 'Задача переведена в плановые');
+            }}>Перевести в плановую</button>
+          )}
+        </dd>
+        {f.task_kind && f.task_kind !== 'planned' && (
+          <>
+            <dt>Состояние</dt><dd>{BUG_STATE[f.status?.semantic ?? 'new']}{f.closed_at ? `, устранено ${fmtDate(f.closed_at)}` : ''}</dd>
+            <dt>Срочность</dt><dd>{f.urgency ? URGENCY_LABEL[f.urgency] : <span className="muted">не указана</span>}</dd>
+            <dt>Срок устранения</dt><dd>{f.planned_end ? fmtDate(f.planned_end) : <span className="muted">не указан</span>}</dd>
+            {f.fact_hours != null && (<><dt>Факт часов</dt><dd>{f.fact_hours} ч</dd></>)}
+          </>
+        )}
         {f.initiator !== undefined && (
           <>
             <dt>Инициатор</dt>
