@@ -8,6 +8,7 @@ import { auditStmt, diffFields, type Change } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import { canSeeFeature, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, matchesInitiator, TASK_KINDS, viewerOf, visibleFeatures, type FeatureFlag, type Viewer, type World } from '../lib/world';
+import { nextNumber } from '../lib/numbers';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД').nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -234,7 +235,7 @@ export function registerFeatureRoutes(r: Router) {
     const id = newId('f');
     const now = nowIso();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const num = ((await first<{ n: number }>(db, 'SELECT COALESCE(MAX(number), 0) + 1 AS n FROM features'))?.n ?? 1);
+      const num = await nextNumber(db, 'features');
       const statements = [
         stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, author_name, assignee_name,
             requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by,

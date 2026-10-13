@@ -5,6 +5,7 @@ import { PhasePanel } from './Phases';
 import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
+import { PurgeButton } from './Purge';
 
 type Tab = 'about' | 'priority' | 'resources' | 'links' | 'history';
 
@@ -55,6 +56,7 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
           <VisBadge v={f.visibility} />
           <span className="grow" />
           {canEdit && <button className="btn sm" onClick={() => setEditing(true)}>Редактировать</button>}
+          <PurgeButton kind="feature" refKey={f.key} small onDone={close} />
           <button className="btn ghost icon sm" onClick={close} aria-label="Закрыть"><I.x /></button>
         </div>
         <h2 className="drawer-title">{f.title}</h2>

@@ -363,7 +363,7 @@ function Audit() {
   const [type, setType] = useState('');
   const [before, setBefore] = useState<number | null>(null);
   const { data, error } = useApi<any>(`/admin/audit?${new URLSearchParams({ ...(type ? { entity_type: type } : {}), ...(before ? { before: String(before) } : {}) })}`);
-  const types = ['feature', 'vote', 'estimate', 'placement', 'relation', 'epic', 'release', 'capacity', 'plan', 'import', 'import_source', 'export', 'api_key', 'sprint', 'calendar', 'user', 'departments', 'teams', 'periods', 'settings'];
+  const types = ['feature', 'proposal', 'vote', 'estimate', 'placement', 'relation', 'epic', 'release', 'capacity', 'plan', 'import', 'import_source', 'export', 'api_key', 'sprint', 'calendar', 'user', 'departments', 'teams', 'periods', 'settings'];
   return (
     <div className="stack">
       <div className="toolbar">

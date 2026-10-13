@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { I } from '../icons';
 import { fmtDate, fmtH, mutate, openFeature, useApi, useApp, useDict } from '../lib';
 import { Cubes, Empty, ErrorBox, Field, GuestNote, Loading, Modal, PageHead, Progress, StatusPill, VisBadge, useDirty } from '../ui';
+import { PurgeButton } from './Purge';
 
 export function Epics() {
   const { me } = useApp();
@@ -54,6 +55,7 @@ export function Epics() {
                 </div>
                 <div className="hide-md" style={{ textAlign: 'right' }}>
                   {canEdit && <button className="btn sm" onClick={(ev) => { ev.stopPropagation(); setEdit(e); }}>Изменить</button>}
+                  <PurgeButton kind="epic" refKey={e.id} small />
                 </div>
               </div>
               {open[e.id] && (

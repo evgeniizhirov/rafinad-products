@@ -6,6 +6,7 @@ import { first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/d
 import { badRequest, conflict, HttpError, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import { canSee, featureDto, indexWorld, loadWorld, showEstimates, viewerOf, type Indexes, type Viewer, type World } from '../lib/world';
 import { sortFeatures } from './features';
+import { nextNumber } from '../lib/numbers';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -73,9 +74,6 @@ export function epicSummary(epic: Row, viewer: Viewer, w: World, idx: Indexes) {
   };
 }
 
-async function nextNumber(ctx: Ctx, table: 'epics') {
-  return ((await first<{ n: number }>(ctx.env.DB, `SELECT COALESCE(MAX(number), 0) + 1 AS n FROM ${table}`))?.n ?? 1);
-}
 
 export function registerCatalogRoutes(r: Router) {
   // ───── epics ─────
@@ -105,7 +103,7 @@ export function registerCatalogRoutes(r: Router) {
     const db = ctx.env.DB;
     const id = newId('e');
     const now = nowIso();
-    const num = await nextNumber(ctx, 'epics');
+    const num = await nextNumber(ctx.env.DB, 'epics');
     await tx(db, [
       stmt(db, `INSERT INTO epics (id, number, external_ref, title, description, category_id, owner_name, status_id, start_date, end_date, visibility, created_at, updated_at, created_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

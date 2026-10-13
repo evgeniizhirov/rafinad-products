@@ -125,6 +125,8 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT id, name FROM departments'),
     q('SELECT id, name FROM users WHERE is_active = 1'),
     q('SELECT id, feature_id, kind, url, origin, source_id, locally_edited FROM feature_links'),
+    q('SELECT entity_type, external_id, entity_key, deleted_at FROM import_tombstones WHERE source_id = ?', sourceId),
+    q("SELECT key, value FROM app_settings WHERE key IN ('number_floor.features', 'number_floor.epics')"),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
@@ -150,6 +152,11 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     users: r(11) as Snapshot['users'],
     featureLinks: r(12) as Snapshot['featureLinks'],
     sourceId,
+    tombstones: r(13) as Snapshot['tombstones'],
+    numberFloors: {
+      features: Number(r(14).find((x) => x.key === 'number_floor.features')?.value ?? 0) || 0,
+      epics: Number(r(14).find((x) => x.key === 'number_floor.epics')?.value ?? 0) || 0,
+    },
   };
 }
 
@@ -231,8 +238,8 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   st.push(abortIf(db, 'run_state', `NOT EXISTS (SELECT 1 FROM import_runs WHERE id = ? AND status = 'preview')`, run.id));
 
   // 1. decide final ids for every entity row
-  let nextFeature = Math.max(0, ...snap.features.map((f) => f.number ?? 0)) + 1;
-  let nextEpic = Math.max(0, ...snap.epics.map((f) => f.number ?? 0)) + 1;
+  let nextFeature = Math.max(snap.numberFloors?.features ?? 0, ...snap.features.map((f) => f.number ?? 0)) + 1;
+  let nextEpic = Math.max(snap.numberFloors?.epics ?? 0, ...snap.epics.map((f) => f.number ?? 0)) + 1;
   const entityItems = drafts.filter((d) => d.entityType === 'epic' || d.entityType === 'feature');
   const plan = new Map<number, { mode: string; id: string | null; number?: number }>();
   for (const d of entityItems) {
@@ -351,7 +358,9 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
           }
         }
         st.push(linkStmt(type, ext, p.id, pl));
-        st.push(auditStmt(db, user, type, p.id, 'import_created', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber}` }], reason));
+        // a row deleted for good comes back only by this conscious choice: the tombstone goes away with it
+        if (pl.tombstone) st.push(stmt(db, 'DELETE FROM import_tombstones WHERE source_id = ? AND entity_type = ? AND lower(external_id) = lower(?)', source.id, type, ext));
+        st.push(auditStmt(db, user, type, p.id, 'import_created', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber}` }, ...(pl.tombstone ? [{ field: 'restored_after_delete', old: pl.tombstone.key, new: null }] : [])], reason));
         if (type === 'feature') importLinks(d, p.id, true);
         continue;
       }

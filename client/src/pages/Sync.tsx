@@ -582,10 +582,10 @@ function ImportItem({ runId, it, editable }: { runId: string; it: any; editable:
         <span className="small muted">{ENTITY_LABEL[it.entity_type]}</span>
         {it.external_id && it.entity_type !== 'relation' && <span className="key">{it.external_id}</span>}
         <b className="grow" style={{ minWidth: 200 }}>{title}</b>
-        {skipped && <span className="pill outline">пропущено</span>}
+        {skipped && <span className="pill outline">{p.tombstone ? `удалена администратором (${p.tombstone.key})` : 'пропущено'}</span>}
         {editable && ['create', 'update'].includes(it.action) && (
           skipped
-            ? <button className="btn ghost sm" onClick={() => setRes(it.action === 'create' ? { mode: 'create' } : { mode: 'update', targetId: it.target_id, fields: {}, protected: {} })}>Вернуть</button>
+            ? <button className="btn ghost sm" onClick={() => setRes(it.action === 'create' ? { mode: 'create' } : { mode: 'update', targetId: it.target_id, fields: {}, protected: {} })}>{p.tombstone ? 'Восстановить импорт' : 'Вернуть'}</button>
             : <button className="btn ghost sm" onClick={() => setRes({ mode: 'skip' })}>Пропустить</button>
         )}
       </div>

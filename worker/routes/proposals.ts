@@ -12,6 +12,7 @@ import { all, bool, first, guardVersion, newId, nowIso, parseJson, stmt, tx, typ
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import { canSeeFeature, deptWeights, indexWorld, isProductInternal, loadWorld, sprintRef, statusDto, viewerOf, type Indexes, type Viewer, type World } from '../lib/world';
 import type { D1Database } from '../env';
+import { nextNumber } from '../lib/numbers';
 
 const text = (max: number) => z.string().trim().max(max);
 const editSchema = {
@@ -204,7 +205,7 @@ export function registerProposalRoutes(r: Router) {
     const id = newId('prp');
     const now = nowIso();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const num = (await first<{ n: number }>(db, 'SELECT COALESCE(MAX(number), 0) + 1 AS n FROM proposals'))?.n ?? 1;
+      const num = await nextNumber(db, 'proposals');
       try {
         await tx(db, [
           stmt(db, `INSERT INTO proposals (id, number, title, description, expected_result, author_id, author_name, department_id, created_at, updated_at)

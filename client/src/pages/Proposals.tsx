@@ -4,6 +4,7 @@ import { FeaturePicker } from '../features';
 import { I } from '../icons';
 import { api, ApiError, fmtDate, fmtDateTime, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDebounced, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHead, ReasonModal, RichText, StatusPill, useDirty } from '../ui';
+import { PurgeButton } from './Purge';
 
 const STATUS_COLOR: Record<string, string> = {
   new: '#6b7fd7', review: '#b07a1f', accepted: '#2f6fb0', postponed: '#9b8b6e', rejected: '#7d7d7d', planned: '#8a3b8f', implemented: '#3f8f4f',
@@ -172,6 +173,7 @@ export function ProposalDetail({ id }: { id: string }) {
         <button className="btn ghost" onClick={() => navigate('/proposals')}>Все предложения</button>
         {p.permissions.edit && <button className="btn" onClick={() => setEditing(true)}>Изменить</button>}
         {p.permissions.merge && <button className="btn ghost" onClick={() => setMerging(true)}>Объединить с…</button>}
+        <PurgeButton kind="proposal" refKey={p.key} onDone={() => navigate('/proposals')} />
       </PageHead>
       {p.merged_into_ref && (
         <Notice kind="info">Предложение объединено с <a href={`/proposals/${p.merged_into_ref.key}`} onClick={(e) => { e.preventDefault(); navigate(`/proposals/${p.merged_into_ref.key}`); }}>{p.merged_into_ref.key} «{p.merged_into_ref.title}»</a>. Голоса, задачи и комментарии перенесены туда; эта страница сохранена для истории.</Notice>

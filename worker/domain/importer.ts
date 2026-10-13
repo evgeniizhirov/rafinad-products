@@ -92,6 +92,10 @@ export interface Snapshot {
   featureLinks?: ExistingLink[];
   sourceId?: string;
   users?: { id: string; name: string }[];
+  /** rows of this source whose record an administrator deleted for good (vNext ТЗ §5): never re-created silently */
+  tombstones?: { entity_type: string; external_id: string; entity_key: string; deleted_at: string }[];
+  /** numbers of deleted records are never reused (vNext ТЗ §5) */
+  numberFloors?: { features: number; epics: number };
 }
 
 export type EntityType = 'epic' | 'feature' | 'relation' | 'sheet';
@@ -265,6 +269,7 @@ export function resolveMerged(map: Map<string, SnapshotEntity>, id: string): Sna
 
 export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string; hyperlinks?: SheetHyperlinks } = {}): ItemDraft[] {
   const L = buildLookup(snap);
+  const tombs = new Map((snap.tombstones ?? []).map((t) => [`${t.entity_type}|${lc(t.external_id)}`, t]));
   const items: ItemDraft[] = [];
   let seq = 0;
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
@@ -465,6 +470,16 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (errors.length) {
         const it = push({ ...base, action: 'error', resolution: null });
         if (externalId && !inRun[entityType].has(lc(externalId))) inRun[entityType].set(lc(externalId), it);
+        continue;
+      }
+
+      // 0. deleted for good by an administrator: skipped unless the import is consciously restored («Создать»)
+      const tomb = tombs.get(`${entityType}|${lc(externalId)}`);
+      if (tomb) {
+        payload.tombstone = { key: tomb.entity_key, deleted_at: tomb.deleted_at };
+        warnings.push(`Запись ${tomb.entity_key} удалена администратором ${tomb.deleted_at.slice(8, 10)}.${tomb.deleted_at.slice(5, 7)}.${tomb.deleted_at.slice(0, 4)} — строка пропускается. «Восстановить импорт» создаст её заново.`);
+        const it = push({ ...base, action: 'create', resolution: { mode: 'skip' } });
+        inRun[entityType].set(lc(externalId), it);
         continue;
       }
 
