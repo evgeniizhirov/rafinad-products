@@ -27,7 +27,7 @@ export async function loadPhaseData(db: D1Database, featureId?: string): Promise
   const args = featureId ? [featureId] : [];
   const [bl, ev, fc, st] = await Promise.all([
     all(db, `SELECT * FROM feature_plan_baselines${where} ORDER BY feature_id, revision`, ...args),
-    all(db, `SELECT * FROM feature_phase_events${where} ORDER BY at, created_at`, ...args),
+    all(db, `SELECT * FROM feature_phase_events${where} ORDER BY at, created_at, rowid`, ...args),
     all(db, `SELECT * FROM feature_phase_forecasts${where}`, ...args),
     all(db, 'SELECT id, phase FROM stages WHERE phase IS NOT NULL'),
   ]);
@@ -114,7 +114,7 @@ export function registerPhaseRoutes(r: Router) {
     const data = await loadPhaseData(ctx.env.DB, f.id);
     const revisions = await all(ctx.env.DB, 'SELECT b.*, u.name AS captured_by_name FROM feature_plan_baselines b LEFT JOIN users u ON u.id = b.captured_by WHERE b.feature_id = ? ORDER BY revision', f.id);
     const events = viewer === 'guest' ? [] : await all(ctx.env.DB, `SELECT e.id, e.phase, e.kind, e.at, e.original_at, e.reason, e.created_at, u.name AS created_by_name, c.name AS corrected_by_name
-      FROM feature_phase_events e LEFT JOIN users u ON u.id = e.created_by LEFT JOIN users c ON c.id = e.corrected_by WHERE e.feature_id = ? ORDER BY e.at, e.created_at`, f.id);
+      FROM feature_phase_events e LEFT JOIN users u ON u.id = e.created_by LEFT JOIN users c ON c.id = e.corrected_by WHERE e.feature_id = ? ORDER BY e.at, e.created_at, e.rowid`, f.id);
     return json({
       timeline: timelineFor(row, idx, data),
       phases: PHASES.map((p) => ({ code: p, name: PHASE_LABEL[p] })),

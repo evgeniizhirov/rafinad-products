@@ -214,7 +214,7 @@ export function registerProposalRoutes(r: Router) {
         ]);
         return json({ id, number: num, key: proposalKey(num) }, 201);
       } catch (e) {
-        if (attempt === 2 || !/UNIQUE/i.test(String((e as Error).message))) throw e;
+        if (attempt === 2 || (e as { code?: string }).code !== 'unique_violation') throw e;
       }
     }
     throw conflict('busy', 'Не удалось присвоить номер — повторите');

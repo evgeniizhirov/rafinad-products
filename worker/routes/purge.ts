@@ -11,8 +11,8 @@ import type { D1Database, D1PreparedStatement } from '../env';
 import { PROPOSAL_STATUS_LABEL, proposalKey } from '../domain/proposals';
 import { auditStmt } from '../lib/audit';
 import { perms, requirePerm, type SessionUser } from '../lib/auth';
-import { all, first, guardVersion, nowIso, parseJson, stmt, tx, type Row } from '../lib/db';
-import { badRequest, json, notFound, readJson, type Router } from '../lib/http';
+import { abortIf, all, first, guardVersion, nowIso, parseJson, stmt, tx, type Row } from '../lib/db';
+import { badRequest, conflict, json, notFound, readJson, type Router } from '../lib/http';
 import { raiseFloorStmt, type Numbered } from '../lib/numbers';
 import { isProductInternal } from '../lib/world';
 
@@ -85,6 +85,15 @@ function importEffects(links: Row[], items: number): Effect[] {
 }
 
 const auditEffect = (n: number): Effect => ({ label: 'История изменений', count: n, note: 'Стирается полностью, копии не сохраняются. Останется одна запись журнала о факте удаления (ID, название, кто и когда удалил, причина).' });
+const FEATURE_AUDIT_TYPES = "('feature', 'vote', 'estimate', 'placement', 'relation', 'comment')";
+// Child mutations (for example comments and votes) do not bump the parent version.
+// The monotonic audit sequence binds confirmation to the complete preview, and the
+// transaction guard catches changes made while the deletion plan is being read.
+const REVISION_SQL = "COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_log'), 0)";
+const STALE = 'Данные изменились после предпросмотра. Откройте предпросмотр заново.';
+async function revision(db: D1Database): Promise<number> {
+  return Number((await first(db, `SELECT ${REVISION_SQL} AS revision`))!.revision);
+}
 
 async function featurePlan(db: D1Database, rec: Row): Promise<Plan> {
   const recs = await withMerged(db, 'features', rec);
@@ -109,7 +118,7 @@ async function featurePlan(db: D1Database, rec: Row): Promise<Plan> {
     q(`SELECT (SELECT COUNT(*) FROM feature_plan_baselines WHERE feature_id IN (${IN})) AS b, (SELECT COUNT(*) FROM feature_phase_events WHERE feature_id IN (${IN})) AS e,
        (SELECT COUNT(*) FROM feature_phase_forecasts WHERE feature_id IN (${IN})) AS f`, ...ids, ...ids, ...ids),
     q(`SELECT COUNT(*) AS n FROM import_items WHERE entity_type = 'feature' AND target_id IN (${IN})`, ...ids),
-    q(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'feature' AND entity_id IN (${IN})`, ...ids),
+    q(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type IN ${FEATURE_AUDIT_TYPES} AND entity_id IN (${IN})`, ...ids),
     q('SELECT ms.month_id, ms.data, m.month FROM month_snapshots ms JOIN accounting_months m ON m.id = ms.month_id'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
@@ -160,7 +169,7 @@ async function featurePlan(db: D1Database, rec: Row): Promise<Plan> {
         del('feature_links'), del('proposal_features'), del('feature_plan_baselines'), del('feature_phase_events'), del('feature_phase_forecasts'),
         stmt(db, `DELETE FROM feature_relations WHERE from_id IN (${IN}) OR to_id IN (${IN})`, ...ids, ...ids),
         ...importStatements(db, 'feature', ids, links, keyById, user, now),
-        stmt(db, `DELETE FROM audit_log WHERE entity_type = 'feature' AND entity_id IN (${IN})`, ...ids),
+        stmt(db, `DELETE FROM audit_log WHERE entity_type IN ${FEATURE_AUDIT_TYPES} AND entity_id IN (${IN})`, ...ids),
         ...snaps.map((s) => {
           const data = parseJson<Row>(s.data, {});
           data.tasks = (data.tasks ?? []).map((t: Row) => (ids.includes(t.id) ? { ...t, id: null, title: 'Удалённая задача' } : t));
@@ -229,19 +238,22 @@ async function proposalPlan(db: D1Database, rec: Row): Promise<Plan> {
 }
 
 async function planFor(db: D1Database, kind: string, ref: string): Promise<Plan> {
-  if (!(kind in KIND)) throw badRequest('Удалить навсегда можно задачу, эпик или предложение');
+  if (!Object.hasOwn(KIND, kind)) throw badRequest('Удалить навсегда можно задачу, эпик или предложение');
   const rec = await findRecord(db, kind as Kind, ref);
   return kind === 'feature' ? featurePlan(db, rec) : kind === 'epic' ? epicPlan(db, rec) : proposalPlan(db, rec);
 }
 
-const purgeSchema = z.object({ confirm: z.string().max(40), version: z.number().int(), reason: z.string().trim().max(500).optional() });
+const purgeSchema = z.object({ confirm: z.string().max(40), version: z.number().int(), preview_revision: z.number().int().nonnegative(), reason: z.string().trim().max(500).optional() });
 
 export function registerPurgeRoutes(r: Router) {
   r.get('/api/admin/purge/:kind/:ref', async (ctx) => {
     requirePerm(ctx, perms.admin, 'Удалять навсегда может только администратор');
+    const previewRevision = await revision(ctx.env.DB);
     const p = await planFor(ctx.env.DB, ctx.params.kind, ctx.params.ref);
+    if (previewRevision !== await revision(ctx.env.DB)) throw conflict('version_conflict', STALE);
     return json({
       kind: p.kind, id: p.record.id, key: p.key, title: p.title, version: p.record.version,
+      preview_revision: previewRevision,
       merged: p.dupKeys, effects: p.effects, warnings: p.warnings,
       confirm: p.key,
       backup: 'Отменить удаление нельзя. Вернуть данные можно только восстановлением всей базы из резервной копии Cloudflare D1 (Time Travel, до 30 дней) — это откатит и все остальные изменения после этого момента.',
@@ -256,6 +268,7 @@ export function registerPurgeRoutes(r: Router) {
     if (b.confirm.trim().toUpperCase() !== p.key.toUpperCase()) throw badRequest(`Для подтверждения введите ${p.key}`);
     const reason = b.reason || null;
     await tx(db, [
+      abortIf(db, 'purge:preview', `${REVISION_SQL} <> ?`, b.preview_revision),
       guardVersion(db, KIND[p.kind].table, p.record.id, b.version),
       ...p.statements(user, reason),
       raiseFloorStmt(db, KIND[p.kind].table, Math.max(...p.numbers)),
@@ -265,7 +278,7 @@ export function registerPurgeRoutes(r: Router) {
         { field: 'title', old: p.title, new: null },
         ...(p.dupKeys.length ? [{ field: 'merged_duplicates', old: p.dupKeys.join(', '), new: null }] : []),
       ], reason),
-    ], 'Запись изменилась после предпросмотра. Откройте предпросмотр заново.');
+    ], STALE);
     return json({ ok: true, key: p.key, deleted: [p.key, ...p.dupKeys] });
   });
 }

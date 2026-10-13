@@ -12,6 +12,18 @@ const v = (app: TestApp, id: string) => app.one('SELECT version FROM features WH
 const allTasks = (g: any) => [...g.releases.flatMap((r: any) => r.sprints.flatMap((s: any) => s.groups.flatMap((x: any) => x.tasks))), ...g.outside];
 
 describe('shared Gantt', () => {
+  test('a delayed task inside a sprint extends the chart beyond the calendar', async () => {
+    const app = await setup();
+    const pm = await app.user('pm@test.io', 'product');
+    await calendar(app, pm);
+    const sprint = app.one("SELECT * FROM sprints WHERE code = '8.1'");
+    const task = (await app.call('POST', '/api/features', { title: 'Late task' }, pm)).body;
+    assert.equal((await app.call('PATCH', `/api/features/${task.id}/schedule`, { sprint_id: sprint.id, version: v(app, task.id) }, pm)).status, 200);
+    assert.equal((await app.call('PUT', `/api/features/${task.id}/phase-forecast`, { phase: 'release', end_date: '2030-02-01', reason: 'External dependency' }, pm)).status, 200);
+    const gantt = (await app.call('GET', '/api/gantt', undefined, pm)).body;
+    assert.ok(gantt.range.to > '2030-02-01');
+    assert.ok(!gantt.outside.some((t: any) => t.id === task.id));
+  });
   test('business and Product get the very same diagram; hidden and draft tasks leak nowhere (rows, counters, tooltips)', async () => {
     const app = await setup();
     const pm = await app.user('pm@test.io', 'product');

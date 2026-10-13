@@ -1,7 +1,7 @@
 // «Удалить навсегда» (vNext ТЗ §5): administrator only, one record at a time. The dialog shows what will disappear
 // with the record (server preview), asks for the key of the record to be typed in, and only then deletes it.
 // To hide a record without deleting it, use the ordinary ways: status «Отменена», visibility «Черновик», «Отклонено».
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, invalidate, toast, useApi, useApp } from '../lib';
 import { ErrorBox, Loading, Modal, Notice } from '../ui';
 
@@ -30,16 +30,19 @@ function PurgeDialog({ kind, refKey, onClose, onDone }: { kind: Kind; refKey: st
   const [typed, setTyped] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => { setTyped(''); }, [data?.preview_revision]);
   const ok = !!data && typed.trim().toUpperCase() === data.confirm.toUpperCase();
   const run = async () => {
     setBusy(true);
     try {
-      const r = await api(`/admin/purge/${kind}/${encodeURIComponent(refKey)}`, { method: 'POST', body: { confirm: typed.trim(), version: data.version, ...(reason.trim() ? { reason: reason.trim() } : {}) } });
+      const r = await api(`/admin/purge/${kind}/${encodeURIComponent(refKey)}`, { method: 'POST', body: { confirm: typed.trim(), version: data.version, preview_revision: data.preview_revision, ...(reason.trim() ? { reason: reason.trim() } : {}) } });
       toast(`Удалено навсегда: ${r.deleted.join(', ')}`);
       onDone();
       invalidate();
     } catch (e) {
       toast((e as Error).message, 'error');
+      setTyped('');
+      invalidate();
       setBusy(false);
     }
   };

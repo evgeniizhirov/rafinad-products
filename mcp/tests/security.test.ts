@@ -43,6 +43,8 @@ test('unknown fields, URL IDs and missing confirmation never reach REST', async 
   for (const [name, args] of [
     ['get_task', { id: 'https://evil.test/' }], ['get_task', { id: '..' }],
     ['search_tasks', { url: 'https://evil.test/' }],
+    ['search_tasks', { offer: 'retired' }], ['search_tasks', { period: 'retired' }],
+    ['create_task', { fields: { title: 'x', offer_ids: ['retired'] }, confirmed: true }],
     ['create_task', { fields: { title: 'x' } }],
     ['create_task', { fields: { title: 'x', author_name: 'spoof' }, confirmed: true }],
   ] as const) assert.ok((await h.call(name, args)).isError);

@@ -100,6 +100,10 @@ describe('export builder', () => {
     ]);
     assert.equal(p.rows.find((r: any) => r.cells[0] === 'Альфа').cells[2], 'https://jira.example.com/browse/R-1\nhttps://jira.example.com/browse/R-2');
     assert.match(p.structure.excel, /сворачивать/);
+    const numericOnly = (await app.call('POST', '/api/exports/build/preview', { spec: { ...spec, columns: [{ field: 'estimate_total' }] } }, pm)).body;
+    assert.equal(numericOnly.header[0], 'Группа');
+    assert.equal(numericOnly.rows[0].cells[0], 'Спринт: 8.1 · 3');
+    assert.equal(numericOnly.rows[0].cells[1], 18);
 
     const files = unzip(await bytes(app, '/api/exports/build/xlsx', { spec }, pm));
     const sheet = files['xl/worksheets/sheet1.xml'];
@@ -160,7 +164,11 @@ describe('export builder', () => {
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     const reqs = calls.find((c) => c.url.includes(':batchUpdate'))!.body.requests;
     const add = reqs.find((x: any) => x.addSheet);
-    assert.equal(add.addSheet.properties.title, 'Экспорт — Статусы');
+    assert.equal(add.addSheet.properties.title, `Экспорт — Статусы · ${t.id}`);
+    const sameName = (await app.call('POST', '/api/exports/templates', { name: 'Статусы', spec }, pm)).body;
+    const secondPreview = (await app.call('POST', '/api/exports/build/preview', { template_id: sameName.id }, pm)).body;
+    assert.ok(secondPreview.structure.google.includes(sameName.id));
+    assert.ok(!secondPreview.structure.google.includes(t.id), 'same-name templates have separate tabs');
     assert.ok(!JSON.stringify(reqs).includes('"sheetId":77') && !JSON.stringify(reqs).includes('"sheetId":0,'), 'the Import tab and other tabs are not touched');
     const rows = reqs.find((x: any) => x.updateCells?.rows).updateCells.rows;
     assert.deepEqual(rows[0].values.map((x: any) => x.userEnteredValue?.stringValue), ['Статус', 'ID', 'Название'], 'flat: the grouping field comes first');

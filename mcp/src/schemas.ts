@@ -5,7 +5,7 @@ const date = z.iso.date();
 const text = z.string().max(300);
 export const filters = z.strictObject({
   q: z.string().max(500).optional(),
-  ...Object.fromEntries(['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'stage', 'kind', 'sprint', 'ids', 'assignee', 'initiator', 'visibility', 'tag'].map(k => [k, text.optional()])),
+  ...Object.fromEntries(['status', 'category', 'epic', 'department', 'release', 'stage', 'kind', 'sprint', 'ids', 'assignee', 'initiator', 'visibility', 'tag'].map(k => [k, text.optional()])),
   hide_closed: z.enum(['0', '1']).optional(), focus: z.enum(['0', '1']).optional(),
   internal: z.enum(['1', 'only', 'all']).optional(),
   created_from: date.optional(), created_to: date.optional(),
@@ -18,7 +18,7 @@ export const fields = z.strictObject({
   requested_at: date.nullable().optional(), planned_start: date.nullable().optional(), planned_end: date.nullable().optional(),
   visibility: z.enum(['draft', 'internal', 'public']).optional(), external_ref: z.string().max(100).nullable().optional(),
   private_notes: z.string().max(5000).nullable().optional(), tags: z.array(z.string().min(1).max(40)).max(20).optional(),
-  offer_ids: z.array(id).max(100).optional(), task_kind: z.enum(['planned', 'bug', 'operational_improvement']).optional(),
+  task_kind: z.enum(['planned', 'bug', 'operational_improvement']).optional(),
   is_focus: z.boolean().optional(), urgency: z.enum(['low', 'medium', 'high', 'critical']).nullable().optional(),
   fact_hours: z.number().min(0).max(100000).nullable().optional(), is_product_internal: z.boolean().optional(),
   initiator: z.discriminatedUnion('type', [

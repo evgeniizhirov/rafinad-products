@@ -105,13 +105,15 @@ async function builderSelection(ctx: Ctx, b: z.infer<typeof buildBody>) {
   const builtin = template?.id === TASKFLOW_TEMPLATE_ID && layout(spec) === layout(TASKFLOW_SPEC);
   // a changed copy of the built-in layout is no longer «TaskFlow»: its own sheet name and Google tab
   const name = template && (template.scope !== 'builtin' || builtin) ? template.name : 'Конструктор';
-  return { ...c, spec, rows, table, template, builtin, name, internal: rows.filter((f) => isProductInternal(f)).length };
+  const tab = googleTab(name, builtin, template?.scope !== 'builtin' && template ? template.id : c.user.id);
+  return { ...c, spec, rows, table, template, builtin, name, tab, internal: rows.filter((f) => isProductInternal(f)).length };
 }
 
 const TYPE_LABEL: Record<string, string> = { text: 'текст', number: 'число', date: 'дата ДД.ММ.ГГГГ', bool: 'Да / Нет', list: 'список через запятую', lines: 'несколько значений — по строке в ячейке' };
-const googleTab = (name: string, builtin: boolean) => (builtin ? EXPORT_SHEET : `Экспорт — ${name}`.replace(/[\[\]*?/\\:]/g, ' ').slice(0, 90));
+// Names are editable and not unique: retain the stable identity after truncation.
+const googleTab = (name: string, builtin: boolean, identity: string) => (builtin ? EXPORT_SHEET : `${`Экспорт — ${name}`.replace(/[\[\]*?/\\:]/g, ' ').slice(0, 65)} · ${identity}`);
 
-function structureOf(t: BuiltTable, name: string, builtin: boolean, subtotals: boolean) {
+function structureOf(t: BuiltTable, name: string, builtin: boolean, subtotals: boolean, tab: string) {
   return {
     sheet: name,
     columns: t.columns.map((c) => ({ title: c.title, type: TYPE_LABEL[c.type] ?? c.type, sum: c.sum && subtotals })),
@@ -121,7 +123,7 @@ function structureOf(t: BuiltTable, name: string, builtin: boolean, subtotals: b
       : 'Плоская таблица с автофильтром, шапка закреплена.',
     google: builtin
       ? `Вкладка «${EXPORT_SHEET}» перезаписывается целиком, другие вкладки не меняются.`
-      : `Вкладка «${googleTab(name, false)}» (создаётся при первой выгрузке, другие вкладки не меняются): плоская таблица без строк групп${t.groups.some((g) => !t.columns.some((c) => c.field === g.field)) ? ', поля группировки — первыми колонками' : ''}.`,
+      : `Вкладка «${tab}» (создаётся при первой выгрузке, другие вкладки не меняются): плоская таблица без строк групп${t.groups.some((g) => !t.columns.some((c) => c.field === g.field)) ? ', поля группировки — первыми колонками' : ''}.`,
   };
 }
 
@@ -196,7 +198,7 @@ export function registerExportRoutes(r: Router) {
       rows: s.table.rows.slice(0, 50).map((r) => ({ kind: r.kind, level: r.level, cells: r.cells })),
       total_rows: s.table.rows.length,
       skipped: s.table.skipped,
-      structure: structureOf(s.table, s.name, s.builtin, s.spec.subtotals),
+      structure: structureOf(s.table, s.name, s.builtin, s.spec.subtotals, s.tab),
     });
   });
 
@@ -222,7 +224,7 @@ export function registerExportRoutes(r: Router) {
     if (!canGoogle(s.user, s.w.settings)) throw forbidden('Выгрузка в Google-таблицу недоступна для вашей роли');
     const target = s.w.settings.export_google_spreadsheet_id;
     if (!target) throw new HttpError(400, 'not_configured', 'Администратор ещё не указал таблицу для экспорта');
-    const tab = googleTab(s.name, s.builtin);
+    const tab = s.tab;
     if (!b.confirm_external) {
       throw conflict('confirm_external', `Вкладку «${tab}» увидят все, у кого есть доступ к Google-таблице. Будет выгружено задач: ${s.rows.length}.`, { count: s.rows.length, internal_count: s.internal, tab });
     }

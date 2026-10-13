@@ -62,6 +62,11 @@ export function buildTable(tasks: Row[], spec: ExportSpec, catalog: FieldDef[]):
     if (!f) { skipped.push(s.field); return []; }
     return [{ def: f, dir: s.dir === 'desc' ? -1 : 1 }];
   });
+  // A numeric-only grouped report still needs a text cell for group labels;
+  // otherwise the first subtotal overwrites the label and groups become anonymous.
+  if (groups.length && cols.length && cols.every((c) => c.def.sum && c.def.type === 'number')) {
+    cols.unshift({ def: { id: '__group_label', group: '', label: 'Группа', type: 'text', get: () => null }, title: 'Группа' });
+  }
 
   // stable: groups first, then the chosen sort, then the incoming order (priority from the backlog query)
   const order = new Map(tasks.map((t, i) => [t.id, i]));

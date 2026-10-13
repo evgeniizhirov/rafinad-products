@@ -13,6 +13,19 @@ const BASE = { revision: 1, dev_start: '2026-10-07', dev_end: '2026-10-20', qa_s
 const ph = (tl: any, p: string) => tl.phases.find((x: any) => x.phase === p);
 
 describe('phase timeline (pure)', () => {
+  test('reopening on the same day stays active for both phases and the release', () => {
+    for (const phase of ['dev', 'release'] as const) {
+      const tl = computeTimeline(planned, S81, null, [
+        { phase, kind: 'start', at: '2026-10-13' },
+        { phase, kind: 'done', at: '2026-10-13' },
+        { phase, kind: 'start', at: '2026-10-13' },
+      ], [], '2026-10-13');
+      const part = phase === 'release' ? tl.release : ph(tl, phase);
+      assert.equal(part.state, 'active');
+      assert.equal(phase === 'release' ? part.fact : part.fact.end, null);
+      assert.equal(tl.current, phase);
+    }
+  });
   test('plan comes from the sprint; product / design have no invented dates; release is a milestone', () => {
     const tl = computeTimeline(planned, S81, null, [], [], '2026-10-01');
     assert.deepEqual(ph(tl, 'dev').plan, { start: '2026-10-07', end: '2026-10-20' });

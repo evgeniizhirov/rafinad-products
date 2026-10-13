@@ -100,9 +100,10 @@ export function registerGanttRoutes(r: Router) {
     if (cur < 0) cur = Math.max(0, out.length - 1);
     const win = out.slice(cur, cur + 3);
     const outsideDtos = outside.sort(byNumber).map((f) => taskDto(f, viewer, idx, data, today));
+    const displayedTasks = [...outsideDtos, ...out.flatMap((rel) => rel.sprints.flatMap((s) => s.groups.flatMap((g) => g.tasks)))];
     const dates = [
       ...out.flatMap((x) => [x.start, x.end]),
-      ...outsideDtos.flatMap((t) => [...t.timeline.phases.flatMap((p) => [p.plan?.start, p.plan?.end, p.fact.start, p.fact.end, p.forecast_end]), t.timeline.release.plan, t.timeline.release.fact, t.timeline.release.forecast]),
+      ...displayedTasks.flatMap((t) => [...t.timeline.phases.flatMap((p) => [p.plan?.start, p.plan?.end, p.fact.start, p.fact.end, p.forecast_end]), t.timeline.release.plan, t.timeline.release.fact, t.timeline.release.forecast]),
     ].filter((d): d is string => !!d).sort();
     return json({
       scope, today,

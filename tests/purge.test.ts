@@ -50,9 +50,9 @@ describe('permanent deletion', () => {
     }
     assert.ok(pv.effects.find((e: any) => e.label === 'Связи с задачами').items.some((x: string) => x.includes(b.key)));
 
-    assert.equal((await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: 'RF-0', version: pv.version }, admin)).status, 400, 'wrong key');
-    assert.equal((await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: a.key, version: pv.version + 7 }, admin)).status, 409, 'stale preview');
-    const r = await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: a.key.toLowerCase(), version: pv.version, reason: 'Тестовая запись' }, admin);
+    assert.equal((await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: 'RF-0', preview_revision: pv.preview_revision, version: pv.version }, admin)).status, 400, 'wrong key');
+    assert.equal((await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: a.key, preview_revision: pv.preview_revision, version: pv.version + 7 }, admin)).status, 409, 'stale preview');
+    const r = await app.call('POST', `/api/admin/purge/feature/${a.key}`, { confirm: a.key.toLowerCase(), preview_revision: pv.preview_revision, version: pv.version, reason: 'Тестовая запись' }, admin);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.deepEqual(r.body.deleted, [a.key, dup.key]);
 
@@ -64,7 +64,7 @@ describe('permanent deletion', () => {
     assert.ok(app.one('SELECT id FROM proposals WHERE id = ?', prop.id), 'proposal stays');
     assert.equal(app.one("SELECT COUNT(*) AS n FROM proposal_features WHERE proposal_id = ?", prop.id).n, 0);
     // history wiped; one record of the fact, without content
-    const logs = app.many("SELECT * FROM audit_log WHERE entity_type = 'feature' AND entity_id IN (?, ?)", ...ids);
+    const logs = app.many("SELECT * FROM audit_log WHERE entity_id IN (?, ?)", ...ids);
     assert.equal(logs.length, 1);
     assert.equal(logs[0].action, 'deleted_permanently');
     assert.equal(logs[0].reason, 'Тестовая запись');
@@ -77,6 +77,24 @@ describe('permanent deletion', () => {
     assert.equal((await app.call('GET', `/api/features/${b.key}`, undefined, pm)).status, 200);
   });
 
+  test('new child activity invalidates the preview even if the task version is unchanged', async () => {
+    const app = await setup();
+    const admin = await app.user('admin@test.io', 'admin');
+    const task = (await app.call('POST', '/api/features', { title: 'Keep the new comment' }, admin)).body;
+    const path = '/api/admin/purge/feature/' + task.key;
+    const preview = (await app.call('GET', path, undefined, admin)).body;
+    assert.equal((await app.call('POST', '/api/features/' + task.id + '/comments', { body: 'Added after preview' }, admin)).status, 201);
+    assert.equal(v(app, task.id), preview.version);
+    const stale = await app.call('POST', path, { confirm: task.key, version: preview.version, preview_revision: preview.preview_revision }, admin);
+    assert.equal(stale.status, 409);
+    assert.equal(app.one('SELECT COUNT(*) AS n FROM comments WHERE feature_id = ?', task.id).n, 1);
+    assert.ok(app.one('SELECT id FROM features WHERE id = ?', task.id));
+    const fresh = (await app.call('GET', path, undefined, admin)).body;
+    assert.ok(fresh.preview_revision > preview.preview_revision);
+    assert.equal((await app.call('POST', path, { confirm: task.key, version: fresh.version, preview_revision: fresh.preview_revision }, admin)).status, 200);
+    assert.equal((await app.call('GET', '/api/admin/purge/toString/' + task.key, undefined, admin)).status, 400);
+  });
+
   test('epics and proposals: tasks stay (without the epic / the link), duplicates go along, numbers are not reused', async () => {
     const app = await setup();
     const admin = await app.user('admin@test.io', 'admin');
@@ -86,7 +104,7 @@ describe('permanent deletion', () => {
     const t = (await app.call('POST', '/api/features', { title: 'Задача эпика', epic_id: ep.id }, pm)).body;
     const epv = (await app.call('GET', `/api/admin/purge/epic/${ep.id}`, undefined, admin)).body;
     assert.ok(epv.effects.find((e: any) => e.label === 'Задачи эпика').items[0].includes(t.key));
-    assert.equal((await app.call('POST', `/api/admin/purge/epic/${ep.id}`, { confirm: epv.key, version: epv.version }, admin)).status, 200);
+    assert.equal((await app.call('POST', `/api/admin/purge/epic/${ep.id}`, { confirm: epv.key, preview_revision: epv.preview_revision, version: epv.version }, admin)).status, 200);
     assert.equal(app.one('SELECT epic_id FROM features WHERE id = ?', t.id).epic_id, null);
     assert.ok(app.many("SELECT * FROM audit_log WHERE entity_type = 'feature' AND entity_id = ? AND changes LIKE '%epic%'", t.id).length >= 1, 'the task history tells where its epic went');
 
@@ -97,7 +115,7 @@ describe('permanent deletion', () => {
     assert.equal((await app.call('POST', `/api/proposals/${p2.id}/merge`, { target_id: p1.id, source_version: pv1(p2.id), target_version: pv1(p1.id), confirm: true }, pm)).status, 200);
     const ppv = (await app.call('GET', `/api/admin/purge/proposal/${p1.key}`, undefined, admin)).body;
     assert.deepEqual(ppv.merged, [p2.key]);
-    assert.equal((await app.call('POST', `/api/admin/purge/proposal/${p1.key}`, { confirm: p1.key, version: ppv.version }, admin)).status, 200);
+    assert.equal((await app.call('POST', `/api/admin/purge/proposal/${p1.key}`, { confirm: p1.key, preview_revision: ppv.preview_revision, version: ppv.version }, admin)).status, 200);
     assert.equal(app.one('SELECT COUNT(*) AS n FROM proposals WHERE id IN (?, ?)', p1.id, p2.id).n, 0);
     assert.ok(app.one('SELECT id FROM features WHERE id = ?', t.id), 'the task stays');
     const p3 = (await app.call('POST', '/api/proposals', { title: 'Новое' }, lead)).body;
@@ -119,7 +137,7 @@ describe('permanent deletion', () => {
 
     const pv = (await app.call('GET', `/api/admin/purge/feature/${f.id}`, undefined, admin)).body;
     assert.ok(pv.effects.find((e: any) => e.label === 'Импорт из таблиц').items[0].includes('T-1'));
-    assert.equal((await app.call('POST', `/api/admin/purge/feature/${f.id}`, { confirm: pv.key, version: pv.version }, admin)).status, 200);
+    assert.equal((await app.call('POST', `/api/admin/purge/feature/${f.id}`, { confirm: pv.key, preview_revision: pv.preview_revision, version: pv.version }, admin)).status, 200);
     assert.equal(app.one("SELECT COUNT(*) AS n FROM source_entity_links WHERE entity_id = ?", f.id).n, 0);
     assert.equal(app.one("SELECT COUNT(*) AS n FROM import_items WHERE target_id = ?", f.id).n, 0, 'copies in old previews are wiped');
     const tomb = app.one("SELECT * FROM import_tombstones WHERE source_id = ? AND external_id = 'T-1'", src);

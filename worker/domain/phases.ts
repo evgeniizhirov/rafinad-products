@@ -77,9 +77,11 @@ export function planOf(task: PhaseTask, sprint: SprintDates | null): { dev: Rang
 
 export function computeTimeline(task: PhaseTask, sprint: SprintDates | null, baseline: Baseline | null, events: PhaseEvent[], forecasts: Forecast[], today: string): Timeline {
   const plan = planOf(task, sprint);
-  const sorted = [...events].sort((a, b) => a.at.localeCompare(b.at) || (a.kind === 'start' ? -1 : 1));
+  // Keep persisted insertion order on the same day: a later start reopens a phase.
+  const sorted = [...events].sort((a, b) => a.at.localeCompare(b.at));
   const first = (p: Phase, k: 'start' | 'done') => sorted.find((e) => e.phase === p && e.kind === k)?.at ?? null;
   const last = (p: Phase, k: 'start' | 'done') => [...sorted].reverse().find((e) => e.phase === p && e.kind === k)?.at ?? null;
+  const latest = (p: Phase) => [...sorted].reverse().find((e) => e.phase === p);
   const fc = new Map(forecasts.map((f) => [f.phase, f]));
   const touched = (p: Phase) => sorted.some((e) => e.phase === p);
   const laterTouched = (p: Phase) => PHASES.slice(PHASES.indexOf(p) + 1).some((x) => touched(x)) || task.done;
@@ -96,9 +98,8 @@ export function computeTimeline(task: PhaseTask, sprint: SprintDates | null, bas
     const base = baseFor(p);
     const start = first(p, 'start');
     // a phase reopened after «done» counts as active again: the latest «done» must come after the latest «start»
-    const lastStart = last(p, 'start');
     const lastDone = last(p, 'done');
-    const isDone = !!lastDone && (!lastStart || lastDone >= lastStart);
+    const isDone = latest(p)?.kind === 'done';
     const f = fc.get(p);
     let state: PhaseState;
     let forecast: string | null = null;
@@ -133,7 +134,7 @@ export function computeTimeline(task: PhaseTask, sprint: SprintDates | null, bas
   });
 
   // release milestone
-  const relDone = last('release', 'done') ?? (task.done ? task.closed_at ?? null : null);
+  const relDone = (latest('release')?.kind === 'done' ? last('release', 'done') : null) ?? (task.done ? task.closed_at ?? null : null);
   const relFc = fc.get('release');
   const relBase = baseline?.release_date ?? null;
   let relState: PhaseState = relDone ? 'done' : touched('release') ? 'active' : plan.release && plan.release < today ? 'unconfirmed' : 'not_started';
