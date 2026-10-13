@@ -211,6 +211,14 @@ export const EXPORT_SHEET = 'Import';
  * strings / numbers (userEnteredValue.stringValue), so nothing is interpreted as a formula.
  */
 export async function writeImportTab(env: Env, spreadsheetId: string, rows: (string | number | null | undefined)[][]): Promise<{ sheetTitle: string }> {
+  return writeTab(env, spreadsheetId, rows, EXPORT_SHEET, false);
+}
+
+/**
+ * Same as writeImportTab for any tab title. With `create`, a missing tab is added in the same batchUpdate
+ * (vNext export builder: a template writes to its own tab «Экспорт — <name>»). Other tabs are never addressed.
+ */
+export async function writeTab(env: Env, spreadsheetId: string, rows: (string | number | null | undefined)[][], title: string, create: boolean): Promise<{ sheetTitle: string }> {
   const sa = serviceAccount(env);
   if (!sa) throw new HttpError(400, 'no_service_account', 'Сервисный аккаунт Google не настроен (секрет GOOGLE_SERVICE_ACCOUNT_JSON)');
   const token = await accessToken(env, sa, WRITE_SCOPE);
@@ -222,14 +230,20 @@ export async function writeImportTab(env: Env, spreadsheetId: string, rows: (str
   }
   if (!meta.ok) throw new HttpError(502, 'google_unavailable', `Google Sheets ответил HTTP ${meta.status}. Таблица не изменена.`);
   const info = (await meta.json()) as { sheets?: { properties: { sheetId: number; title: string; gridProperties?: { rowCount?: number; columnCount?: number } } }[] };
-  const tab = (info.sheets ?? []).find((x) => x.properties.title === EXPORT_SHEET);
-  if (!tab) throw new HttpError(400, 'google_no_import_tab', `В таблице нет вкладки «${EXPORT_SHEET}». Создайте её — другие вкладки экспорт не трогает.`);
-  const sheetId = tab.properties.sheetId;
+  const tab = (info.sheets ?? []).find((x) => x.properties.title === title);
+  if (!tab && !create) throw new HttpError(400, 'google_no_import_tab', `В таблице нет вкладки «${title}». Создайте её — другие вкладки экспорт не трогает.`);
   const width = Math.max(1, ...rows.map((r) => r.length));
   const needRows = rows.length + 1;
-  const grid = tab.properties.gridProperties ?? {};
   const requests: unknown[] = [];
-  if ((grid.rowCount ?? 0) < needRows || (grid.columnCount ?? 0) < width) {
+  let sheetId: number;
+  if (!tab) {
+    const taken = new Set((info.sheets ?? []).map((x) => x.properties.sheetId));
+    sheetId = 1_000_000 + Math.floor(Math.random() * 1_000_000_000);
+    while (taken.has(sheetId)) sheetId++;
+    requests.push({ addSheet: { properties: { sheetId, title, gridProperties: { rowCount: Math.max(1000, needRows), columnCount: Math.max(26, width), frozenRowCount: 1 } } } });
+  } else sheetId = tab.properties.sheetId;
+  const grid = tab?.properties.gridProperties ?? { rowCount: Math.max(1000, needRows), columnCount: Math.max(26, width) };
+  if (tab && ((grid.rowCount ?? 0) < needRows || (grid.columnCount ?? 0) < width)) {
     requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: Math.max(grid.rowCount ?? 0, needRows), columnCount: Math.max(grid.columnCount ?? 0, width) } }, fields: 'gridProperties(rowCount,columnCount)' } });
   }
   requests.push({ updateCells: { range: { sheetId }, fields: 'userEnteredValue' } }); // clear the whole tab
@@ -249,5 +263,5 @@ export async function writeImportTab(env: Env, spreadsheetId: string, rows: (str
   });
   if (res.status === 403) throw new HttpError(400, 'google_no_access', `Сервисному аккаунту ${sa.client_email} нужна роль «Редактор» в таблице экспорта.`);
   if (!res.ok) throw new HttpError(502, 'google_write_failed', `Google Sheets не принял данные (HTTP ${res.status}). Изменение отменено целиком.`);
-  return { sheetTitle: EXPORT_SHEET };
+  return { sheetTitle: title };
 }

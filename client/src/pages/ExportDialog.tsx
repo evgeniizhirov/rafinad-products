@@ -1,6 +1,6 @@
 // FR-08: export the current backlog selection (all pages) to XLSX or to the «Import» tab of the export spreadsheet.
 import { useEffect, useState } from 'react';
-import { api, ApiError, toast, useApi } from '../lib';
+import { api, ApiError, navigate, toast, useApi } from '../lib';
 import { Loading, Modal, Notice } from '../ui';
 
 export function ExportDialog({ query, onClose }: { query: string; onClose: () => void }) {
@@ -21,7 +21,9 @@ export function ExportDialog({ query, onClose }: { query: string; onClose: () =>
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'tasks.xlsx';
+      document.body.appendChild(a);
       a.click();
+      a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       toast(`Выгружено задач: ${res.headers.get('x-export-count')}`);
       onClose();
@@ -50,13 +52,14 @@ export function ExportDialog({ query, onClose }: { query: string; onClose: () =>
       {!preview ? <Loading rows={2} /> : (
         <div className="stack">
           <p style={{ margin: 0 }}>
-            По текущим фильтрам — <b>{preview.count}</b> задач (все страницы списка), {preview.columns.length} колонок. Права проверяет сервер: выгрузка содержит только то, что вы видите.
+            По текущим фильтрам — <b>{preview.count}</b> задач (все страницы списка), {preview.columns.length} колонок шаблона «TaskFlow». Права проверяет сервер: выгрузка содержит только то, что вы видите.
             {preview.internal_count > 0 && <> Внутренних задач продукта: <b>{preview.internal_count}</b>.</>}
           </p>
           <div className="row wrap">
             <button className="btn primary" disabled={busy || !preview.count} onClick={downloadXlsx}>Скачать Excel (.xlsx)</button>
             {g?.allowed && g.configured && <button className="btn" disabled={busy || !preview.count} onClick={() => toGoogle()}>Выгрузить в Google-таблицу</button>}
           </div>
+          <a className="small" style={{ color: 'var(--info)' }} href={`/export?query=${encodeURIComponent(query)}`} onClick={(e) => { e.preventDefault(); onClose(); navigate(`/export?query=${encodeURIComponent(query)}`); }}>Настроить колонки, группировку и шаблоны в конструкторе экспорта →</a>
           {g?.allowed && !g.configured && <p className="small muted" style={{ margin: 0 }}>Выгрузка в Google станет доступна, когда администратор укажет таблицу экспорта.</p>}
           {g?.url && <a className="small" style={{ color: 'var(--info)' }} href={g.url} target="_blank" rel="noopener noreferrer">Открыть таблицу экспорта (вкладка «Import»)</a>}
           {confirm && (

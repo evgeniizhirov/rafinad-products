@@ -7,6 +7,7 @@ import { AcceptInvite, Account, Login } from './pages/Auth';
 import { Backlog } from './pages/Backlog';
 import { Epics } from './pages/Epics';
 import { FeatureDrawer } from './pages/FeatureDrawer';
+import { ExportBuilder } from './pages/Export';
 import { Overview } from './pages/Overview';
 import { Planner } from './pages/Planner';
 import { Priorities } from './pages/Priorities';
@@ -40,6 +41,7 @@ const NAV = [
   { to: '/planner', label: 'Планировщик', icon: I.board, plan: true },
   { to: '/budget', label: 'Бюджет', icon: I.priorities, plan: true },
   { to: '/analytics', label: 'Аналитика', icon: I.analytics, member: true },
+  { to: '/export', label: 'Экспорт', icon: I.sheet, member: true },
 ];
 
 function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNavigate: () => void }) {
@@ -96,6 +98,7 @@ function Routes() {
     case 'calendar': return <Calendar />;
     case 'budget': return <Budget />;
     case 'planner': return <Planner />;
+    case 'export': return <ExportBuilder />;
     case 'analytics': return <Analytics />;
     case 'proposals': return seg[1] ? <ProposalDetail id={seg[1]} /> : <Proposals />;
     case 'sync': return <Sync />;

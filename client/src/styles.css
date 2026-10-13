@@ -539,6 +539,26 @@ table.data td.c, table.data th.c { text-align: center; }
 .btn.primary.danger-fill:disabled { opacity: .45; }
 .purge-effects { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 
+/* export builder (vNext §4) */
+.export-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; margin-bottom: 12px; }
+.export-bar .select { width: auto; max-width: 320px; }
+.export-grid { display: grid; grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(260px, 320px); gap: 16px; align-items: start; margin-top: 12px; }
+.export-col { max-height: 640px; display: flex; flex-direction: column; }
+.export-col > .panel-body { overflow-y: auto; }
+.export-field { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--ink); font: inherit; font-size: 13px; }
+.export-field:hover:not(:disabled) { background: var(--surface-3); }
+.export-field svg { width: 14px; height: 14px; color: var(--ink-3); flex: none; }
+.export-field.on { color: var(--ink-3); cursor: default; }
+.export-colrow { display: flex; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.export-colrow .grip { cursor: grab; color: var(--ink-3); letter-spacing: -2px; user-select: none; }
+.export-colrow.drop-before { box-shadow: 0 -3px 0 var(--beet); }
+.export-colrow.missing { border-color: var(--warn); }
+.export-preview tr.grp td { font-weight: 600; background: #e4e9f2; }
+.export-preview tr.grp1 td { background: #f2f4f8; }
+.export-preview td.num, .export-preview th.num { text-align: right; }
+.export-structure ol { margin: 4px 0 6px; padding-left: 20px; columns: 2; }
+@media (max-width: 1100px) { .export-grid { grid-template-columns: minmax(0, 1fr); } .export-col { max-height: none; } .export-structure ol { columns: 1; } }
+
 /* analytics */
 .section-h { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
 
