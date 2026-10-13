@@ -7,6 +7,8 @@ export const env: Env = {
   MCP_RESOURCE: 'https://mcp.test/mcp', OAUTH_ISSUER: 'https://identity.test/',
   OAUTH_JWKS_URL: 'https://identity.test/jwks', OAUTH_CLIENT_ID: 'chatgpt-test',
   OWNER_SUBJECT: 'owner', RAFINAD_API_KEY: 'fake-local-key', ENABLE_WRITES: 'true',
+  // All existing tests explicitly inject their own fetcher; fail if a test forgets.
+  ROADMAP_API: { fetch: async () => { throw new Error('Test must inject REST fetcher or configure mock binding'); } },
 };
 const pair = await generateKeyPair('ES256');
 export const keys = createLocalJWKSet({ keys: [{ ...await exportJWK(pair.publicKey), kid: 'test', alg: 'ES256' }] });

@@ -9,6 +9,9 @@
   "observability": { "enabled": false },
   // OAuth settings live in the Cloudflare dashboard (Variables): a deploy must never wipe them.
   "keep_vars": true,
+  "services": [
+    { "binding": "ROADMAP_API", "service": "products-roadmap" }
+  ],
   "vars": {
     "MCP_RESOURCE": "https://rafinad-roadmap-mcp.ezhirov-es.workers.dev/mcp",
     "ENABLE_WRITES": "false"
