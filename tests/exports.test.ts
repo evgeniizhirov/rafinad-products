@@ -70,10 +70,9 @@ describe('export', () => {
     assert.equal((await app.call('POST', '/api/exports/xlsx', { query: '' }, null)).status, 401);
     const own = await rawXlsx(app, pm, 'internal=1');
     assert.ok(own.sheet.includes('Скрытая для экспорта'));
-    // lead's columns do not include product-only ones
+    // one column set for everyone: the TaskFlow layout
     const head = (await app.call('POST', '/api/exports/preview', { query: '' }, lead)).body.columns;
-    assert.ok(!head.includes('Внутренняя задача продукта'));
-    assert.ok((await app.call('POST', '/api/exports/preview', { query: '' }, pm)).body.columns.includes('Внутренняя задача продукта'));
+    assert.deepEqual(head, (await app.call('POST', '/api/exports/preview', { query: '' }, pm)).body.columns);
   });
 
   test('Google: only the configured spreadsheet, only the «Import» tab, one atomic batchUpdate, confirmations, roles (T14, T15)', async () => {
@@ -137,6 +136,32 @@ describe('export', () => {
     assert.equal(noTab.body.error.code, 'google_no_import_tab');
     assert.equal(calls.filter((c) => c.url.includes(':batchUpdate')).length, before);
     assert.ok(app.one("SELECT 1 AS ok FROM export_runs WHERE target = 'google' AND status = 'failed'"));
+  });
+
+  test('columns follow the TaskFlow sheet; unknown values stay empty', async () => {
+    const app = await setup();
+    const pm = await app.user('pm@test.io', 'product');
+    const be = app.one("SELECT id FROM resource_teams WHERE code = 'backend'").id;
+    const pr = app.one("SELECT id FROM resource_teams WHERE code = 'product'").id;
+    const cat = app.one('SELECT id, name FROM categories LIMIT 1');
+    const full = (await app.call('POST', '/api/features', { title: 'Полная', description: 'Комментарий к задаче\n\nФакт: 6 ч', category_id: cat.id, assignee_name: 'Азат Резяпов', estimates: { [be]: 3, [pr]: 2 }, tags: ['P2', 'влетевшая'] }, pm)).body.id;
+    app.many("UPDATE features SET planned_end = '2026-10-23', baseline_production_date = '2026-10-19', closed_at = '2026-10-22', status_id = (SELECT id FROM statuses WHERE entity = 'feature' AND semantic = 'done' LIMIT 1) WHERE id = ? RETURNING 1", full);
+    const bare = (await app.call('POST', '/api/features', { title: 'Пустая' }, pm)).body.id;
+    const x = await rawXlsx(app, pm, `ids=${full},${bare}`);
+    const cells = (title: string) => {
+      // empty cells are not written: place each cell by its column letter
+      const row = [...x.sheet.matchAll(/<row [^>]*>(.*?)<\/row>/g)].map((m) => {
+        const out: string[] = Array(12).fill('');
+        for (const c of m[1].matchAll(/<c r="([A-Z]+)\d+"[^>]*>(.*?)<\/c>/g)) out[c[1].charCodeAt(0) - 65] = c[2].replace(/<[^>]+>/g, '');
+        return out;
+      });
+      return { head: row[0], row: row.find((r) => r.includes(title))! };
+    };
+    const { head, row } = cells('Полная');
+    assert.deepEqual(head, ['Приоритет', 'Задача', 'Категория', 'Сотрудник', 'Изначальный срок', 'Новый срок', 'Дата выполнения', 'Оценка в часах', 'Факт в часах', 'Комментарий', 'Сделано', 'Влетевшая']);
+    assert.deepEqual(row, ['2', 'Полная', cat.name, 'Азат Резяпов', '19.10.2026', '23.10.2026', '22.10.2026', '5', '6', 'Комментарий к задаче', 'Да', 'Да']);
+    const empty = cells('Пустая').row;
+    assert.deepEqual(empty, ['', 'Пустая', empty[2], '', '', '', '', '', '', '', 'Нет', 'Нет']);
   });
 
   test('API key with exports:read can download XLSX but never write to Google', async () => {
