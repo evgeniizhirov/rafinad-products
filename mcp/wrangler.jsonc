@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rafinad-roadmap-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "vars": {
+    "MCP_RESOURCE": "https://rafinad-roadmap-mcp.ezhirov-es.workers.dev/mcp",
+    "ENABLE_WRITES": "false"
+  }
+  // Required before deployment: OAUTH_ISSUER, OAUTH_JWKS_URL, OAUTH_CLIENT_ID,
+  // OWNER_SUBJECT. Secret: RAFINAD_API_KEY. Missing settings fail closed.
+  // No D1 binding and no changes to the production Roadmap Worker.
+}
