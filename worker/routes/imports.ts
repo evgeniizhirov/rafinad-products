@@ -36,7 +36,8 @@ const flatSchema = z.object({
 });
 const configSchema = z.object({
   format: z.enum(['template', 'flat']).default('template'),
-  sheets: z.object({ epics: colName, features: colName, offers: colName, relations: colName }).default(DEFAULT_IMPORT_CONFIG.sheets),
+  // an «offers» key of a config saved before vNext is accepted and dropped
+  sheets: z.object({ epics: colName, features: colName, relations: colName }).default(DEFAULT_IMPORT_CONFIG.sheets),
   hoursColumns: z.record(colName, z.string().trim().min(1).max(40)).default({}),
   flat: flatSchema.optional(),
   newVisibility: z.enum(['draft', 'internal']).default('draft'),
@@ -107,9 +108,7 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT entity_type, external_id, entity_id, last_values FROM source_entity_links WHERE source_id = ?', sourceId),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version FROM epics'),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at, assignee_name, planned_end, urgency, fact_hours FROM features'),
-    q('SELECT id, name AS title, description, category_id, status_id, external_code AS external_ref, version FROM offers'),
     q('SELECT type, from_id, to_id FROM feature_relations'),
-    q('SELECT feature_id, offer_id FROM feature_offers'),
     q('SELECT feature_id, team_id, hours, is_manual FROM feature_estimates'),
     q('SELECT feature_id, tag FROM feature_tags ORDER BY tag'),
     q('SELECT id, name FROM departments'),
@@ -117,12 +116,12 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
-  for (const e of r(10)) {
+  for (const e of r(8)) {
     if (!est.has(e.feature_id)) est.set(e.feature_id, {});
     est.get(e.feature_id)![e.team_id] = { hours: e.hours, is_manual: e.is_manual };
   }
   const tagsBy = new Map<string, string[]>();
-  for (const t of r(11)) {
+  for (const t of r(9)) {
     if (!tagsBy.has(t.feature_id)) tagsBy.set(t.feature_id, []);
     tagsBy.get(t.feature_id)!.push(t.tag);
   }
@@ -134,11 +133,9 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     links: r(4).map((l) => ({ ...l, last_values: parseJson(l.last_values, null) })) as Snapshot['links'],
     epics: r(5) as Snapshot['epics'],
     features: r(6).map((f) => ({ ...f, estimates: est.get(f.id) ?? {}, tags: tagsBy.get(f.id) ?? [] })) as Snapshot['features'],
-    offers: r(7) as Snapshot['offers'],
-    relations: r(8) as Snapshot['relations'],
-    featureOffers: r(9) as Snapshot['featureOffers'],
-    departments: r(12) as Snapshot['departments'],
-    users: r(13) as Snapshot['users'],
+    relations: r(7) as Snapshot['relations'],
+    departments: r(10) as Snapshot['departments'],
+    users: r(11) as Snapshot['users'],
   };
 }
 
@@ -197,7 +194,7 @@ function validateResolution(item: Row, res: Resolution) {
   for (const f of Object.keys(res.protected ?? {})) if (!diff.some((d) => d.field === f && d.kind === 'protected')) throw badRequest(`Поле ${f} не является защищённым`);
 }
 
-const TABLE: Record<string, string> = { epic: 'epics', feature: 'features', offer: 'offers' };
+const TABLE: Record<string, string> = { epic: 'epics', feature: 'features' };
 
 /** Build every statement of the apply transaction. Pure planning over the current snapshot — no writes here. */
 async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], itemIds: string[], snap: Snapshot) {
@@ -206,7 +203,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   const L = buildLookup(snap);
   const now = nowIso();
   const lc = (s: string) => s.trim().toLowerCase();
-  const idFor: Record<string, Map<string, string>> = { epic: new Map(), feature: new Map(), offer: new Map() };
+  const idFor: Record<string, Map<string, string>> = { epic: new Map(), feature: new Map() };
   const st: D1PreparedStatement[] = [];
   const counts = { created: 0, updated: 0, unchanged: 0, linked: 0, skipped: 0, errors: 0, relations_created: 0, relations_skipped: 0, conflicts: [] as { row: string; field: string; choice: string }[] };
 
@@ -217,7 +214,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   // 1. decide final ids for every entity row
   let nextFeature = Math.max(0, ...snap.features.map((f) => f.number ?? 0)) + 1;
   let nextEpic = Math.max(0, ...snap.epics.map((f) => f.number ?? 0)) + 1;
-  const entityItems = drafts.filter((d) => d.entityType === 'epic' || d.entityType === 'offer' || d.entityType === 'feature');
+  const entityItems = drafts.filter((d) => d.entityType === 'epic' || d.entityType === 'feature');
   const plan = new Map<number, { mode: string; id: string | null; number?: number }>();
   for (const d of entityItems) {
     const res = d.resolution;
@@ -230,7 +227,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       idFor[d.entityType].set(ext, id);
       plan.set(d.seq, { mode: 'create', id, number });
     } else if (res.mode === 'link') {
-      const map = L.entities[d.entityType as 'epic' | 'feature' | 'offer'];
+      const map = L.entities[d.entityType as 'epic' | 'feature'];
       const target = resolveMerged(map, res.targetId!);
       if (!target) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: выбранная карточка не найдена`);
       idFor[d.entityType].set(ext, target.id);
@@ -240,7 +237,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       plan.set(d.seq, { mode: d.action === 'unchanged' ? 'unchanged' : 'update', id: d.targetId });
     }
   }
-  const resolveExt = (type: 'epic' | 'feature' | 'offer', ext: string | null): string | null => {
+  const resolveExt = (type: 'epic' | 'feature', ext: string | null): string | null => {
     if (!ext) return null;
     const mine = idFor[type].get(lc(ext));
     if (mine) return mine;
@@ -260,8 +257,8 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   const newVisibility = configOf(source).newVisibility === 'internal' ? 'internal' : 'draft';
   const today = now.slice(0, 10);
 
-  // 2. entity statements in dependency order: epics → offers → features
-  for (const type of ['epic', 'offer', 'feature'] as const) {
+  // 2. entity statements in dependency order: epics → features
+  for (const type of ['epic', 'feature'] as const) {
     for (const d of entityItems.filter((x) => x.entityType === type)) {
       const p = plan.get(d.seq);
       if (!p || !p.id) continue;
@@ -273,10 +270,6 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         if (type === 'epic') {
           st.push(stmt(db, `INSERT INTO epics (id, number, external_ref, title, description, category_id, status_id, visibility, created_at, updated_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, p.number, ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
-        } else if (type === 'offer') {
-          const codeTaken = snap.offers.some((o) => o.external_ref && lc(o.external_ref) === lc(ext));
-          st.push(stmt(db, `INSERT INTO offers (id, external_code, name, description, category_id, status_id, visibility, created_at, updated_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, codeTaken ? null : ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
         } else {
           const epicId = resolveExt('epic', pl.epic_ext);
           if (pl.epic_ext && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${pl.epic_ext}» пропущен или не найден — измените решение по эпику`);
@@ -329,8 +322,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
           if (df.source && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${df.source}» не найден`);
           cols.epic_id = epicId;
         } else {
-          const col = type === 'offer' && df.field === 'title' ? 'name' : df.field;
-          cols[col] = df.source;
+          cols[df.field] = df.source;
           if (df.field === 'status_id' && type === 'feature') cols.closed_at = doneStatuses.has(df.source as string) ? pl.closed_at ?? today : null;
         }
         changes.push({ field: df.field, old: df.local, new: df.source });
@@ -374,9 +366,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
     const to = keyToId(d.payload.to_key);
     if (!from || !to || from === to) { counts.relations_skipped++; continue; }
     const t = d.payload.relation_type as string;
-    if (t === 'affects_offer') {
-      st.push(stmt(db, 'INSERT OR IGNORE INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', from, to, now, user.id));
-    } else if (t === 'belongs_to_epic') {
+    if (t === 'belongs_to_epic') {
       st.push(stmt(db, 'UPDATE features SET epic_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND (epic_id IS NULL OR epic_id <> ?)', to, now, from, to));
     } else {
       if (t === 'blocks') {
@@ -477,7 +467,7 @@ export function registerImportRoutes(r: Router) {
   r.put('/api/import/sources/:id/csv', async (ctx) => {
     const user = requirePerm(ctx, perms.import);
     const b = await readJson(ctx, z.object({
-      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), offers: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional(), flat: z.string().max(1_000_000).optional() }),
+      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional(), flat: z.string().max(1_000_000).optional() }),
       version: z.number().int(),
     }));
     const s = await getSource(ctx, ctx.params.id);

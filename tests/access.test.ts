@@ -65,7 +65,6 @@ describe('guest access (public mode)', () => {
       ['PATCH', '/api/features/RF-1/placement', { period_id: null, version: 1 }],
       ['POST', '/api/features/RF-1/merge', { target_id: 'RF-2', source_version: 1, target_version: 1, confirm: true }],
       ['POST', '/api/epics', { title: 'x' }],
-      ['POST', '/api/offers', { name: 'x' }],
       ['POST', '/api/releases', { name: 'x' }],
       ['PUT', '/api/planning/capacity', { period_id: 'per_2026_10', team_id: 'team_backend', hours: 1, version: 1 }],
       ['POST', '/api/planning/propose', {}],

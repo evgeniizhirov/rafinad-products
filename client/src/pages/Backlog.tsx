@@ -5,7 +5,7 @@ import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useD
 import { ExportDialog } from './ExportDialog';
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
-const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
+const FILTERS = ['status', 'category', 'epic', 'department', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
 export const KIND_OPTIONS = [{ id: 'planned', name: 'Плановые задачи' }, { id: 'bug', name: 'Баги' }, { id: 'operational_improvement', name: 'Оперативные доработки' }, { id: 'bug,operational_improvement', name: 'Баги и доработки' }];
 const FLAG_LABEL: Record<string, string> = { open: 'Открытые задачи', blocked: 'С блокировками', unvoted: 'Без голосов отделов', unestimated: 'Без оценки часов' };
 const SEMANTIC_LABEL: Record<string, string> = { new: 'новые', analysis: 'на проработке', ready: 'готовы к планированию', planned: 'запланированы', in_progress: 'в работе', blocked: 'заблокированы', postponed: 'отложены', done: 'завершены', cancelled: 'отменены' };
@@ -37,7 +37,6 @@ export function Backlog() {
   }
   const { data, error, loading } = useApi<any>(`/features?${apiQs}`);
   const epics = useApi<any>('/epics');
-  const offers = useApi<any>('/offers');
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
@@ -81,7 +80,6 @@ export function Backlog() {
         {sel('category', 'Все категории', meta.categories.map((c) => ({ id: c.id, name: c.name })))}
         {sel('epic', 'Все эпики', (epics.data?.epics ?? []).map((e: any) => ({ id: e.id, name: e.title })), [{ id: 'none', name: 'Без эпика' }])}
         {sel('department', 'Интерес отдела', d.activeDepts.map((x) => ({ id: x.id, name: x.name })))}
-        {sel('offer', 'Все офферы', (offers.data?.offers ?? []).map((o: any) => ({ id: o.id, name: o.name })))}
         {sel('release', 'Все релизы', (releases.data?.releases ?? []).map((r: any) => ({ id: r.id, name: r.name })), [{ id: 'none', name: 'Вне релизов' }])}
         {sel('period', 'Все периоды', d.activePeriods.map((p) => ({ id: p.id, name: p.name })), [{ id: 'none', name: 'Не запланированы' }])}
         {sel('kind', 'Все типы работ', KIND_OPTIONS)}

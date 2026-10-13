@@ -2,17 +2,11 @@
 // Used by the "demo CSV source" and served as downloadable templates — lets you test the import
 // without any Google credentials. The files in /samples are generated from these strings.
 
-export const DEMO_SHEETS: Record<'epics' | 'features' | 'offers' | 'relations', string> = {
+export const DEMO_SHEETS: Record<'epics' | 'features' | 'relations', string> = {
   epics: [
     'external_id,title,description,category,status,visibility',
     'GS-EP-10,Мобильное приложение вебмастера,"Нативное приложение iOS/Android: статистика, уведомления о конверсиях, выплаты.",Вебмастерам,Идея,internal',
     'GS-EP-11,Аналитика и отчётность,Сводные отчёты для бизнеса и вебмастеров.,Аналитика,В работе,public',
-  ].join('\r\n'),
-  offers: [
-    'external_id,name,description,category,status,visibility',
-    'OF-2051,Кредитная карта «Платина 120 дней»,"Обновлённые условия: 120 дней без процентов, кэшбэк 5%.",Рекламодателям,Активен,public',
-    'OF-3010,Страхование ипотеки онлайн,Полис для заёмщиков любых банков.,Рекламодателям,Подготовка к запуску,internal',
-    'OF-3011,Онлайн-курс «Аналитик данных»,"CPA за оплату первого месяца, холд 30 дней.",Рекламодателям,Подготовка к запуску,internal',
   ].join('\r\n'),
   features: [
     'external_id,title,description,category,epic_external_id,status,stage,requested_at,backend_hours,frontend_hours,product_hours,qa_hours,design_hours,devops_hours,visibility',
@@ -23,13 +17,13 @@ export const DEMO_SHEETS: Record<'epics' | 'features' | 'offers' | 'relations', 
     'GS-105,Ежедневная сводка по офферу в Telegram,Бот присылает сводку конверсий и выплат по офферу.,Рекламодателям,,Новая,,2026-10-05,24,,8,8,,4,internal',
     'GS-106,Постбеки в реальном времени,"Дубль существующей задачи — должен попасть в «подозрение на дубль».",Платформа,,Новая,,2026-10-06,40,,8,16,,8,internal',
     'GS-107,Экспорт отчётов в Google Sheets,"Вебмастер подключает свою таблицу и получает выгрузку статистики.",Аналитика,GS-EP-11,Новая,,2026-10-07,32,24,8,12,,,internal',
+    // matches seed card RF-18 by its business identifier → update with a description conflict
+    'RAF-530,Публичная страница статуса платформы,"Статус трекинга, кабинета и API, история инцидентов и подписка на уведомления.",Платформа,,Завершена,,2026-07-01,,,,,,,public',
   ].join('\r\n'),
   relations: [
     'from_type,from_external_id,relation_type,to_type,to_external_id',
     'feature,GS-101,blocks,feature,GS-102',
     'feature,GS-103,blocks,feature,GS-101',
-    'feature,GS-104,affects_offer,offer,OF-3011',
-    'feature,GS-105,affects_offer,offer,OF-2051',
     'feature,GS-107,related_to,feature,GS-104',
     'feature,GS-105,belongs_to_epic,epic,GS-EP-11',
   ].join('\r\n'),

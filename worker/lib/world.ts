@@ -43,8 +43,6 @@ export interface World {
   estimates: Row[];
   votes: Row[];
   tags: Row[];
-  offers: Row[];
-  featureOffers: Row[];
   relations: Row[];
   releases: Row[];
   releaseFeatures: Row[];
@@ -58,10 +56,10 @@ export interface World {
 
 /**
  * Loads the catalog for one viewer. Hidden Product tasks (FR-02) are removed together with every row that
- * references them (votes, estimates, tags, offers, relations, release links), so no list, counter, graph,
+ * references them (votes, estimates, tags, relations, release links), so no list, counter, graph,
  * relation or aggregate built on the world can reveal them — not even as a "hidden" placeholder.
  * They stay only when product/admin explicitly ask for them (`includeInternal`): the task list with
- * `?internal=…` and the task card. General views (overview, roadmap, priorities, releases, epics, offers,
+ * `?internal=…` and the task card. General views (overview, roadmap, priorities, releases, epics,
  * planning) never include them, for any role.
  */
 export async function loadWorld(db: D1Database, viewer: Viewer | 'system', opts: { includeInternal?: boolean } = {}): Promise<World> {
@@ -79,7 +77,6 @@ export function withoutProductInternal(w: World): World {
     estimates: w.estimates.filter((x) => keep(x.feature_id)),
     votes: w.votes.filter((x) => keep(x.feature_id)),
     tags: w.tags.filter((x) => keep(x.feature_id)),
-    featureOffers: w.featureOffers.filter((x) => keep(x.feature_id)),
     relations: w.relations.filter((x) => keep(x.from_id) && keep(x.to_id)),
     releaseFeatures: w.releaseFeatures.filter((x) => keep(x.feature_id)),
     blockers: w.blockers.filter((x) => keep(x.feature_id)),
@@ -102,8 +99,6 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM feature_estimates'),
     q('SELECT feature_id, department_id, score, voted_at, version FROM department_votes'),
     q('SELECT * FROM feature_tags ORDER BY tag'),
-    q('SELECT * FROM offers ORDER BY name'),
-    q('SELECT * FROM feature_offers'),
     q('SELECT * FROM feature_relations'),
     q('SELECT * FROM releases ORDER BY planned_date IS NULL, planned_date, name'),
     q('SELECT * FROM release_features'),
@@ -117,8 +112,8 @@ async function loadAll(db: D1Database): Promise<World> {
   for (const s of r(7)) settings[s.key] = s.value;
   return {
     departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
-    epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12), offers: r(13), featureOffers: r(14),
-    relations: r(15), releases: r(16), releaseFeatures: r(17), users: r(18), sprints: r(19), months: r(20), blockers: r(21),
+    epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12),
+    relations: r(13), releases: r(14), releaseFeatures: r(15), users: r(16), sprints: r(17), months: r(18), blockers: r(19),
   };
 }
 
@@ -132,7 +127,6 @@ export interface Indexes {
   stage: Map<string, Row>;
   epic: Map<string, Row>;
   feature: Map<string, Row>;
-  offer: Map<string, Row>;
   release: Map<string, Row>;
   period: Map<string, Row>;
   sprint: Map<string, Row>;
@@ -140,8 +134,6 @@ export interface Indexes {
   estimatesBy: Map<string, Row[]>;
   votesBy: Map<string, Row[]>;
   tagsBy: Map<string, string[]>;
-  offersByFeature: Map<string, string[]>;
-  featuresByOffer: Map<string, string[]>;
   releaseOf: Map<string, string>;
   featuresByRelease: Map<string, string[]>;
   priority: Map<string, PriorityResult>;
@@ -167,14 +159,6 @@ export function indexWorld(w: World): Indexes {
       computePriority((votesBy.get(f.id) ?? []).map((v) => ({ departmentId: v.department_id, score: v.score, votedAt: v.voted_at })), weights),
     );
   }
-  const offersByFeature = new Map<string, string[]>();
-  const featuresByOffer = new Map<string, string[]>();
-  for (const fo of w.featureOffers) {
-    if (!offersByFeature.has(fo.feature_id)) offersByFeature.set(fo.feature_id, []);
-    offersByFeature.get(fo.feature_id)!.push(fo.offer_id);
-    if (!featuresByOffer.has(fo.offer_id)) featuresByOffer.set(fo.offer_id, []);
-    featuresByOffer.get(fo.offer_id)!.push(fo.feature_id);
-  }
   const releaseOf = new Map<string, string>();
   const featuresByRelease = new Map<string, string[]>();
   for (const rf of w.releaseFeatures) {
@@ -193,7 +177,6 @@ export function indexWorld(w: World): Indexes {
     stage: new Map(w.stages.map((s) => [s.id, s])),
     epic: new Map(w.epics.map((s) => [s.id, s])),
     feature: new Map(w.features.map((s) => [s.id, s])),
-    offer: new Map(w.offers.map((s) => [s.id, s])),
     release: new Map(w.releases.map((s) => [s.id, s])),
     period: new Map(w.periods.map((s) => [s.id, s])),
     sprint: new Map(w.sprints.map((s) => [s.id, s])),
@@ -201,8 +184,6 @@ export function indexWorld(w: World): Indexes {
     estimatesBy: groupBy(w.estimates, (e) => e.feature_id),
     votesBy,
     tagsBy,
-    offersByFeature,
-    featuresByOffer,
     releaseOf,
     featuresByRelease,
     priority,
@@ -283,10 +264,6 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
       : null,
     priority: pr,
     votes: (idx.votesBy.get(f.id) ?? []).map((v) => ({ department_id: v.department_id, score: v.score, voted_at: v.voted_at, ...(viewer !== 'guest' ? { version: v.version } : {}) })),
-    offers: (idx.offersByFeature.get(f.id) ?? [])
-      .map((id) => idx.offer.get(id))
-      .filter((o): o is Row => !!o && canSee(viewer, o.visibility))
-      .map((o) => ({ id: o.id, name: o.name, external_code: o.external_code })),
   };
   if (withEst) {
     dto.estimates = estimates;
@@ -369,7 +346,7 @@ export function hasFlag(flag: FeatureFlag, f: Row, w: World, idx: Indexes): bool
 }
 
 /**
- * Tasks of the general lists (backlog, priorities, roadmap, overview, releases, epics, offers, planning).
+ * Tasks of the general lists (backlog, priorities, roadmap, overview, releases, epics, planning).
  * Hidden Product tasks never belong there; product/admin open them with `scope = 'internal'` (or `'all'`).
  */
 export function visibleFeatures(w: World, viewer: Viewer, scope: 'general' | 'internal' | 'all' = 'general'): Row[] {

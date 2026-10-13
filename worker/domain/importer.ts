@@ -11,11 +11,12 @@ import { flatToCanonical, type FlatConfig } from './flatSheet';
 import { findCycle, type Edge } from './graph';
 import { normalizeTitle, parseDate, parseHours, sanitizeCell, similarity } from './text';
 
-export type SheetKey = 'epics' | 'features' | 'offers' | 'relations';
-export const SHEET_KEYS: SheetKey[] = ['epics', 'offers', 'features', 'relations'];
+// «Офферы» removed in vNext (owner decision 13.10): an «Offers» sheet in an old template is ignored.
+export type SheetKey = 'epics' | 'features' | 'relations';
+export const SHEET_KEYS: SheetKey[] = ['epics', 'features', 'relations'];
 
 export interface ImportConfig {
-  /** 'template' — four sheets Epics/Features/Offers/Relations; 'flat' — one sheet of tasks with a column mapping */
+  /** 'template' — sheets Epics/Features/Relations; 'flat' — one sheet of tasks with a column mapping */
   format?: 'template' | 'flat';
   sheets: Record<SheetKey, string>;
   /** extra column header → resource team code (in addition to automatic `<code>_hours`) */
@@ -26,7 +27,7 @@ export interface ImportConfig {
 }
 
 export const DEFAULT_IMPORT_CONFIG: ImportConfig = {
-  sheets: { epics: 'Epics', features: 'Features', offers: 'Offers', relations: 'Relations' },
+  sheets: { epics: 'Epics', features: 'Features', relations: 'Relations' },
   hoursColumns: {},
 };
 
@@ -38,7 +39,6 @@ export const SHEET_COLUMNS: Record<SheetKey, { required: string[]; optional: str
       // bugs / operational improvements (P05); task_kind, initiator and author are applied on creation only
       'task_kind', 'urgency', 'fact_hours', 'initiator', 'author'],
   },
-  offers: { required: ['external_id', 'name'], optional: ['description', 'category', 'status', 'visibility'] },
   relations: { required: ['from_type', 'from_external_id', 'relation_type', 'to_type', 'to_external_id'], optional: [] },
 };
 
@@ -54,11 +54,11 @@ export function sourceSheetNames(config: ImportConfig): { key: SheetKey | 'flat'
 export interface SnapshotEntity {
   id: string;
   number?: number;
-  title: string; // offers: name
+  title: string;
   description: string;
   category_id: string | null;
   status_id: string;
-  external_ref: string | null; // offers: external_code
+  external_ref: string | null;
   version: number;
   merged_into_id?: string | null;
   epic_id?: string | null;
@@ -80,15 +80,13 @@ export interface Snapshot {
   links: { entity_type: string; external_id: string; entity_id: string; last_values: Record<string, unknown> | null }[];
   epics: SnapshotEntity[];
   features: SnapshotEntity[];
-  offers: SnapshotEntity[];
   relations: { type: string; from_id: string; to_id: string }[];
-  featureOffers: { feature_id: string; offer_id: string }[];
   /** for the initiator column: an exact name match becomes a link to a department / user */
   departments?: { id: string; name: string }[];
   users?: { id: string; name: string }[];
 }
 
-export type EntityType = 'epic' | 'feature' | 'offer' | 'relation' | 'sheet';
+export type EntityType = 'epic' | 'feature' | 'relation' | 'sheet';
 export type Action = 'create' | 'update' | 'unchanged' | 'duplicate' | 'error';
 
 export interface DiffEntry {
@@ -135,10 +133,9 @@ export interface ItemDraft {
   resolution: Resolution | null;
 }
 
-const ENTITY_OF: Record<Exclude<SheetKey, 'relations'>, 'epic' | 'feature' | 'offer'> = {
+const ENTITY_OF: Record<Exclude<SheetKey, 'relations'>, 'epic' | 'feature'> = {
   epics: 'epic',
   features: 'feature',
-  offers: 'offer',
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -174,7 +171,7 @@ export function initiatorOf(raw: string, snap: Snapshot): { type: 'free_text' | 
 }
 const KINDS = ['planned', 'bug', 'operational_improvement'];
 
-export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'affects_offer', 'belongs_to_epic'] as const;
+export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'belongs_to_epic'] as const;
 
 const SIMILARITY_THRESHOLD = 0.55;
 
@@ -214,7 +211,7 @@ export interface Lookup {
   stageName: Map<string, string>;
   linkOf: Map<string, { entity_id: string; last_values: Record<string, unknown> | null }>;
   extOfEntity: Map<string, string>; // `${type}|${entityId}` → external id (this source)
-  entities: Record<'epic' | 'feature' | 'offer', Map<string, SnapshotEntity>>;
+  entities: Record<'epic' | 'feature', Map<string, SnapshotEntity>>;
 }
 
 export function buildLookup(s: Snapshot): Lookup {
@@ -244,7 +241,6 @@ export function buildLookup(s: Snapshot): Lookup {
     entities: {
       epic: new Map(s.epics.map((e) => [e.id, e])),
       feature: new Map(s.features.map((e) => [e.id, e])),
-      offer: new Map(s.offers.map((e) => [e.id, e])),
     },
   };
 }
@@ -297,7 +293,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
   const teamName = new Map(snap.teams.map((t) => [t.id, t.name]));
 
   // external ids present in this import (per entity type) → item, used by Relations and epic links
-  const inRun: Record<'epic' | 'feature' | 'offer', Map<string, ItemDraft>> = { epic: new Map(), feature: new Map(), offer: new Map() };
+  const inRun: Record<'epic' | 'feature', Map<string, ItemDraft>> = { epic: new Map(), feature: new Map() };
 
   // flat sheets often list the same task twice (assigned block + general list): flag, never merge silently
   const flatTitles = new Map<string, { row: number; assignee: string }>();
@@ -341,7 +337,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       const errors: string[] = [];
       const warnings: string[] = [];
       const externalId = cell(row, 'external_id', 200);
-      const titleCol = key === 'offers' ? 'name' : 'title';
+      const titleCol = 'title';
       const title = cell(row, titleCol, 2000);
       if (!externalId) errors.push('Не заполнен обязательный столбец external_id');
       if (!title) errors.push(`Не заполнен обязательный столбец ${titleCol}`);
@@ -610,7 +606,7 @@ const eqField = (f: string, a: unknown, b: unknown) =>
   f === 'epic' && typeof a === 'string' && typeof b === 'string' ? lc(a) === lc(b) : eq(a, b);
 
 function diffEntity(
-  type: 'epic' | 'feature' | 'offer',
+  type: 'epic' | 'feature',
   target: SnapshotEntity,
   payload: Record<string, any>,
   last: Record<string, unknown> | null,
@@ -691,7 +687,7 @@ function relationItem(
   row: string[],
   cell: (row: string[], col: string, max?: number) => string,
   L: Lookup,
-  inRun: Record<'epic' | 'feature' | 'offer', Map<string, ItemDraft>>,
+  inRun: Record<'epic' | 'feature', Map<string, ItemDraft>>,
   snap: Snapshot,
 ): ItemDraft {
   const errors: string[] = [];
@@ -705,6 +701,10 @@ function relationItem(
     seq, sheet, rowNumber, entityType: 'relation', externalId: `${fromExt} ${relType} ${toExt}`, action: 'error', targetId: null, targetVersion: null,
     candidates: [], payload, diff: [], errors, warnings: [], resolution: null,
   };
+  if (relType === 'affects_offer') {
+    errors.push('Связь с оффером больше не поддерживается: раздел «Офферы» удалён');
+    return base;
+  }
   if (!(RELATION_TYPES as readonly string[]).includes(relType)) {
     errors.push(`Неизвестный тип связи «${relType}». Допустимо: ${RELATION_TYPES.join(', ')}`);
     return base;
@@ -713,7 +713,6 @@ function relationItem(
     blocks: ['feature', 'feature'],
     related_to: ['feature', 'feature'],
     duplicate_of: ['feature', 'feature'],
-    affects_offer: ['feature', 'offer'],
     belongs_to_epic: ['feature', 'epic'],
   };
   const [ef, et] = expected[relType];
@@ -722,7 +721,7 @@ function relationItem(
     return base;
   }
   // resolve endpoints → existing entity id or "ext:<type>:<id>" for entities created in this run
-  const resolve = (type: 'feature' | 'offer' | 'epic', ext: string): string | null => {
+  const resolve = (type: 'feature' | 'epic', ext: string): string | null => {
     if (!ext) return null;
     const run = inRun[type].get(lc(ext));
     if (run) {
@@ -736,7 +735,7 @@ function relationItem(
     return null;
   };
   const fromKey = resolve(ef as 'feature', fromExt);
-  const toKey = resolve(et as 'feature' | 'offer' | 'epic', toExt);
+  const toKey = resolve(et as 'feature' | 'epic', toExt);
   if (!fromKey) errors.push(`Ссылка на отсутствующую сущность ${ef} «${fromExt}»`);
   if (!toKey) errors.push(`Ссылка на отсутствующую сущность ${et} «${toExt}»`);
   if (errors.length) return base;
@@ -750,8 +749,7 @@ function relationItem(
   // already present?
   let exists = false;
   if (!fromKey!.startsWith('ext:') && !toKey!.startsWith('ext:')) {
-    if (relType === 'affects_offer') exists = snap.featureOffers.some((x) => x.feature_id === fromKey && x.offer_id === toKey);
-    else if (relType === 'belongs_to_epic') exists = L.entities.feature.get(fromKey!)?.epic_id === toKey;
+    if (relType === 'belongs_to_epic') exists = L.entities.feature.get(fromKey!)?.epic_id === toKey;
     else if (relType === 'related_to')
       exists = snap.relations.some((r) => r.type === 'related_to' && ((r.from_id === fromKey && r.to_id === toKey) || (r.from_id === toKey && r.to_id === fromKey)));
     else exists = snap.relations.some((r) => r.type === relType && r.from_id === fromKey && r.to_id === toKey);

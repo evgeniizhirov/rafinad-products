@@ -98,7 +98,6 @@ export function registerDashboardRoutes(r: Router) {
         unvoted,
         unestimated,
         epics: w.epics.filter((e) => canSee(viewer, e.visibility)).length,
-        offers: w.offers.filter((o) => canSee(viewer, o.visibility)).length,
       },
       by_status: w.statuses
         .filter((s) => s.entity === 'feature')

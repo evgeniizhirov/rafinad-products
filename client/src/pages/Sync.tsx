@@ -5,14 +5,13 @@ import { Empty, ErrorBox, Field, Loading, Modal, Notice, PageHead, useDirty } fr
 
 const SHEETS = [
   { key: 'epics', label: 'Эпики' },
-  { key: 'offers', label: 'Офферы' },
   { key: 'features', label: 'Фичи' },
   { key: 'relations', label: 'Связи' },
 ] as const;
 
 const ACTION_LABEL: Record<string, string> = { create: 'Создать', update: 'Обновить', unchanged: 'Без изменений', duplicate: 'Возможный дубль', error: 'Ошибка' };
 const ACTION_PILL: Record<string, string> = { create: 'ok', update: 'info', unchanged: '', duplicate: 'warn', error: 'danger' };
-const ENTITY_LABEL: Record<string, string> = { epic: 'Эпик', feature: 'Задача', offer: 'Оффер', relation: 'Связь', sheet: 'Лист' };
+const ENTITY_LABEL: Record<string, string> = { epic: 'Эпик', feature: 'Задача', relation: 'Связь', sheet: 'Лист' };
 const VIS_LABEL: Record<string, string> = { draft: 'черновики', internal: 'внутренние (видны команде)' };
 const isFlat = (s: any) => s?.config?.format === 'flat';
 
@@ -160,7 +159,7 @@ export function Sync() {
                   <b>Таблица задач</b> (формат «одна таблица»): лист со строками задач и колонками «Задача», «Сотрудник», «Срок», «Сделано», «Оценка в часах» и т. п. — соответствие колонок задаётся в настройках источника, для TaskFlow оно заполнено заранее.
                   Если в таблице нет колонки с ID, задача узнаётся по тексту и исполнителю: переименованная задача придёт как «возможный дубль» и её можно привязать к прежней карточке.
                 </li>
-                <li><b>Шаблон из 4 листов</b>: <b>Epics</b>, <b>Features</b>, <b>Offers</b>, <b>Relations</b> (имена можно изменить в настройках). Шаблоны с примерами строк:{' '}
+                <li><b>Шаблон из 3 листов</b>: <b>Epics</b>, <b>Features</b>, <b>Relations</b> (имена можно изменить в настройках). Шаблоны с примерами строк:{' '}
                   {SHEETS.map((sh, i) => <span key={sh.key}>{i > 0 && ', '}<a href={`/api/import/template/${sh.key}.csv`} style={{ color: 'var(--info)' }}>{sh.label}</a></span>)}.
                 </li>
                 <li>
@@ -230,7 +229,7 @@ const FLAT_FIELDS: { key: string; label: string; hint?: string; required?: boole
 
 function SourceForm({ source, defaults, flatPreset, onClose }: { source: any | null; defaults: any; flatPreset: any; onClose: () => void }) {
   const { meta } = useApp();
-  const base = defaults ?? { sheets: { epics: 'Epics', features: 'Features', offers: 'Offers', relations: 'Relations' }, hoursColumns: {} };
+  const base = defaults ?? { sheets: { epics: 'Epics', features: 'Features', relations: 'Relations' }, hoursColumns: {} };
   const cfg = source?.config ?? base;
   const preset = flatPreset?.flat ?? { sheet: 'TaskFlow', columns: { title: 'Задача' }, flags: {}, hours: {} };
   const [name, setName] = useState(source?.name ?? '');

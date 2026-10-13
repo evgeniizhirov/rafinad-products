@@ -60,7 +60,7 @@ const DICTS = {
   statuses: {
     table: 'statuses',
     create: z.object({
-      entity: z.enum(['feature', 'epic', 'offer', 'release']), code, name: z.string().trim().min(1).max(120),
+      entity: z.enum(['feature', 'epic', 'release']), code, name: z.string().trim().min(1).max(120),
       semantic: z.enum(['new', 'analysis', 'ready', 'planned', 'in_progress', 'blocked', 'postponed', 'done', 'cancelled', 'active']), color, sort_order: z.number().int().default(0),
     }),
     patch: z.object({ name: z.string().trim().min(1).max(120).optional(), color, is_active: z.boolean().optional(), sort_order: z.number().int().optional(), version: z.number().int() }),

@@ -64,7 +64,7 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
             { id: 'about', label: 'Описание' },
             { id: 'priority', label: 'Приоритеты', n: f.priority.voters },
             { id: 'resources', label: 'Ресурсы' },
-            { id: 'links', label: 'Связи', n: Object.values(f.relations).flat().length + f.offers.length || null },
+            { id: 'links', label: 'Связи', n: Object.values(f.relations).flat().length || null },
             ...(f.history ? [{ id: 'history' as Tab, label: 'История' }] : []),
           ]}
         />
@@ -464,11 +464,11 @@ function Links({ f }: { f: any }) {
   const [merging, setMerging] = useState(false);
   const remove = canEdit ? (id: string) => mutate(`/relations/${id}`, 'DELETE', undefined, 'Связь удалена') : undefined;
   const r = f.relations;
-  const empty = !Object.values(r).flat().length && !f.offers.length;
+  const empty = !Object.values(r).flat().length;
   return (
     <div className="stack loose">
       <BusinessBlockers f={f} canEdit={canEdit} />
-      {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку, связанную задачу или оффер.' : null}</Empty>}
+      {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку или связанную задачу.' : null}</Empty>}
       <RefList title="Блокирует" items={r.blocks} onRemove={remove} />
       <RefList title="Заблокирована задачами" items={r.blocked_by} onRemove={remove} />
       <RefList title="Связанные задачи" items={r.related} onRemove={remove} />
@@ -478,17 +478,6 @@ function Links({ f }: { f: any }) {
         <div className="stack tight">
           <div className="small muted">Объединённые дубли</div>
           {f.merged_duplicates.map((m: any) => <div key={m.id} className="row small"><span className="key">{m.key}</span>{m.title}</div>)}
-        </div>
-      )}
-      {f.offers.length > 0 && (
-        <div className="stack tight">
-          <div className="small muted">Влияет на офферы</div>
-          {f.offers.map((o: any) => (
-            <a key={o.id} href={`/offers/${o.id}`} onClick={(e) => { e.preventDefault(); navigate(`/offers/${o.id}`); }} className="row" style={{ padding: '4px 0' }}>
-              <I.offers style={{ width: 15, height: 15, color: 'var(--ink-3)' }} />
-              <span>{o.external_code && <span className="key">{o.external_code} </span>}{o.name}</span>
-            </a>
-          ))}
         </div>
       )}
       {canEdit && (
@@ -571,7 +560,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
               ))}
             </section>
           )}
-          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), офферы ({p.counts.offers}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
+          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
           <button className="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => setTarget(null)}>Выбрать другую карточку</button>
         </div>
       )}
@@ -588,7 +577,7 @@ const ACTIONS: Record<string, string> = {
 
 const FIELD: Record<string, string> = {
   title: 'название', description: 'описание', status_id: 'статус', stage_id: 'этап', category_id: 'категория', epic_id: 'эпик', visibility: 'публикация',
-  period_id: 'период', placement_locked: 'фиксация', closed_at: 'дата завершения', tags: 'теги', offers: 'офферы', author_name: 'автор', assignee_name: 'ответственный',
+  period_id: 'период', placement_locked: 'фиксация', closed_at: 'дата завершения', tags: 'теги', offers: 'офферы (раздел удалён)', author_name: 'автор', assignee_name: 'ответственный',
   requested_at: 'дата постановки', planned_start: 'плановое начало', planned_end: 'плановое завершение', private_notes: 'заметки', external_ref: 'внешний ID',
   task_kind: 'тип работы', is_product_internal: 'внутренняя задача продукта', initiator: 'инициатор', initiator_type: 'вид инициатора', initiator_name: 'инициатор',
   initiator_user_id: 'инициатор (пользователь)', initiator_department_id: 'инициатор (отдел)',

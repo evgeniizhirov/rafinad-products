@@ -162,7 +162,6 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
   const { meta } = useApp();
   const d = useDict();
   const epics = useApi<any>('/epics');
-  const offers = useApi<any>('/offers');
   const [v, setV] = useState<Record<string, any>>(() => ({
     title: feature?.title ?? '',
     description: feature?.description ?? '',
@@ -178,7 +177,6 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     planned_end: feature?.planned_end ?? '',
     external_ref: feature?.external_ref ?? '',
     tags: (feature?.tags ?? []).join(', '),
-    offer_ids: (feature?.offers ?? []).map((o: any) => o.id),
     private_notes: feature?.private_notes ?? '',
     task_kind: feature?.task_kind ?? 'planned',
     is_product_internal: !!feature?.is_product_internal,
@@ -202,7 +200,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       title: v.title.trim(), description: v.description, category_id: nul(v.category_id), epic_id: nul(v.epic_id), status_id: v.status_id,
       stage_id: nul(v.stage_id), visibility: v.visibility, author_name: nul(v.author_name.trim()), assignee_name: nul(v.assignee_name.trim()),
       requested_at: nul(v.requested_at), planned_start: nul(v.planned_start), planned_end: nul(v.planned_end), external_ref: nul(v.external_ref.trim()),
-      tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), offer_ids: v.offer_ids, private_notes: nul(v.private_notes),
+      tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), private_notes: nul(v.private_notes),
       task_kind: v.task_kind, is_product_internal: v.is_product_internal,
       is_focus: v.task_kind === 'planned' && !v.is_product_internal ? v.is_focus : false,
       ...(v.task_kind !== 'planned' || feature?.urgency || feature?.fact_hours != null
@@ -345,20 +343,6 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
             <Field label="Факт часов" hint="Заполняется после устранения, только для аналитики"><input className="input" inputMode="decimal" value={v.fact_hours} onChange={set('fact_hours')} /></Field>
           </>
         )}
-        <Field label="Связанные офферы" span2>
-          <div className="row wrap" style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: 8, gap: 6 }}>
-            {(offers.data?.offers ?? []).map((o: any) => (
-              <label key={o.id} className="check" style={{ width: 'calc(50% - 6px)', minWidth: 220 }}>
-                <input
-                  type="checkbox"
-                  checked={v.offer_ids.includes(o.id)}
-                  onChange={(e) => setV((s) => ({ ...s, offer_ids: e.target.checked ? [...s.offer_ids, o.id] : s.offer_ids.filter((x: string) => x !== o.id) }))}
-                />
-                <span className="ellipsis">{o.external_code ? `${o.external_code} ` : ''}{o.name}</span>
-              </label>
-            ))}
-          </div>
-        </Field>
         <Field label="Приватные заметки" hint="Видны только продуктовой команде и администраторам" span2>
           <textarea className="textarea" rows={2} value={v.private_notes} onChange={set('private_notes')} />
         </Field>

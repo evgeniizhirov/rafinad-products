@@ -186,13 +186,14 @@ function UserForm({ user, onClose, onCreated }: { user: any | null; onClose: () 
 // ───────────────── dictionaries ─────────────────
 type DictKind = 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods';
 const META_KEY: Record<DictKind, string> = { departments: 'departments', teams: 'teams', categories: 'categories', statuses: 'statuses', stages: 'stages', periods: 'periods' };
-const ENTITY: Record<string, string> = { feature: 'Задачи', epic: 'Эпики', offer: 'Офферы', release: 'Релизы' };
+const ENTITY: Record<string, string> = { feature: 'Задачи', epic: 'Эпики', release: 'Релизы' };
 const SEMANTIC: Record<string, string> = { new: 'новая', analysis: 'проработка', ready: 'готова к планированию', planned: 'запланирована', in_progress: 'в работе', blocked: 'заблокирована', postponed: 'отложена', done: 'завершена', cancelled: 'отменена', active: 'активна' };
 
 function Dictionary({ kind }: { kind: DictKind }) {
   const { meta } = useApp();
   const [edit, setEdit] = useState<any | null>(null);
-  const rows: any[] = (meta as any)[META_KEY[kind]] ?? [];
+  // statuses of removed entities (offers, until migration 0012) are not shown
+  const rows: any[] = ((meta as any)[META_KEY[kind]] ?? []).filter((r: any) => kind !== 'statuses' || ENTITY[r.entity]);
   const hint: Record<DictKind, string> = {
     departments: 'Голосующие бизнес-подразделения. Вес влияет на общий балл; отдел с отметкой «Product» решает при равенстве баллов.',
     teams: 'Команды, чьи часы планируются. Колонка Google Sheets по умолчанию — <код>_hours.',
@@ -353,7 +354,7 @@ function Audit() {
   const [type, setType] = useState('');
   const [before, setBefore] = useState<number | null>(null);
   const { data, error } = useApi<any>(`/admin/audit?${new URLSearchParams({ ...(type ? { entity_type: type } : {}), ...(before ? { before: String(before) } : {}) })}`);
-  const types = ['feature', 'vote', 'estimate', 'placement', 'relation', 'epic', 'offer', 'release', 'capacity', 'plan', 'import', 'import_source', 'export', 'api_key', 'sprint', 'calendar', 'user', 'departments', 'teams', 'periods', 'settings'];
+  const types = ['feature', 'vote', 'estimate', 'placement', 'relation', 'epic', 'release', 'capacity', 'plan', 'import', 'import_source', 'export', 'api_key', 'sprint', 'calendar', 'user', 'departments', 'teams', 'periods', 'settings'];
   return (
     <div className="stack">
       <div className="toolbar">

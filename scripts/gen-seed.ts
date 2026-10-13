@@ -34,9 +34,6 @@ export function seedSql(): string[] {
   for (const [id, number, title, description, cat, status, vis, owner, start, end] of S.epics) {
     out.push(ins('epics', { id, number, title, description, category_id: cat, status_id: status, visibility: vis, owner_name: owner, start_date: start, end_date: end, created_at: T0, updated_at: T0, created_by: 'u_pm' }));
   }
-  for (const [id, code, name, description, direction, status, vis] of S.offers) {
-    out.push(ins('offers', { id, external_code: code, name, description, direction, category_id: 'cat_advertisers', status_id: status, visibility: vis, created_at: T0, updated_at: T0, created_by: 'u_pm' }));
-  }
   const fid = (n: number) => `feat_${String(n).padStart(3, '0')}`;
   for (const f of S.features) {
     out.push(ins('features', {
@@ -52,7 +49,6 @@ export function seedSql(): string[] {
     for (const [dep, score] of Object.entries(f.votes ?? {})) {
       out.push(ins('department_votes', { feature_id: fid(f.n), department_id: dep, score, voted_by: voters[dep], voted_at: '2026-10-01T09:00:00Z' }));
     }
-    for (const o of f.offers ?? []) out.push(ins('feature_offers', { feature_id: fid(f.n), offer_id: o, created_at: f.created, created_by: 'u_pm' }));
     for (const t of f.tags ?? []) out.push(ins('feature_tags', { feature_id: fid(f.n), tag: t }));
   }
   S.blocks.forEach(([a, b], i) => out.push(ins('feature_relations', { id: `rel_b${i + 1}`, type: 'blocks', from_id: fid(a), to_id: fid(b), created_at: T0, created_by: 'u_pm' })));

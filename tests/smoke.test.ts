@@ -4,7 +4,7 @@ import { setup } from './helpers';
 
 test('smoke: public endpoints respond for guests', async () => {
   const app = await setup();
-  for (const path of ['/api/meta', '/api/features', '/api/epics', '/api/offers', '/api/priorities', '/api/roadmap', '/api/releases', '/api/overview', '/api/graph']) {
+  for (const path of ['/api/meta', '/api/features', '/api/epics', '/api/priorities', '/api/roadmap', '/api/releases', '/api/overview', '/api/graph']) {
     const r = await app.call('GET', path);
     assert.equal(r.status, 200, `${path}: ${JSON.stringify(r.body).slice(0, 300)}`);
   }

@@ -7,7 +7,6 @@ import { AcceptInvite, Account, Login } from './pages/Auth';
 import { Backlog } from './pages/Backlog';
 import { Epics } from './pages/Epics';
 import { FeatureDrawer } from './pages/FeatureDrawer';
-import { OfferDetail, Offers } from './pages/Offers';
 import { Overview } from './pages/Overview';
 import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
@@ -31,7 +30,6 @@ const NAV = [
   { to: '/', label: 'Обзор', icon: I.overview },
   { to: '/backlog', label: 'Бэклог', icon: I.backlog },
   { to: '/epics', label: 'Эпики', icon: I.epics },
-  { to: '/offers', label: 'Офферы', icon: I.offers },
   { to: '/priorities', label: 'Приоритеты', icon: I.priorities },
   { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
@@ -88,7 +86,6 @@ function Routes() {
   switch (seg[0]) {
     case 'backlog': return <Backlog />;
     case 'epics': return <Epics />;
-    case 'offers': return seg[1] ? <OfferDetail id={seg[1]} /> : <Offers />;
     case 'priorities': return <Priorities />;
     case 'roadmap': return <Roadmap />;
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;

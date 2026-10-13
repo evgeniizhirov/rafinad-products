@@ -7,10 +7,9 @@ const SECRET = 'Секретная проработка тарифов';
 
 async function hiddenTask(app: TestApp, pm: string) {
   const epic = app.one('SELECT id FROM epics ORDER BY number LIMIT 1').id;
-  const offer = app.one('SELECT id FROM offers ORDER BY name LIMIT 1').id;
   const r = await app.call('POST', '/api/features', {
     title: SECRET, description: 'не для отделов', visibility: 'public', is_product_internal: true,
-    epic_id: epic, offer_ids: [offer], tags: ['тайна'], estimates: { team_backend: 40 },
+    epic_id: epic, tags: ['тайна'], estimates: { team_backend: 40 },
   }, pm);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const id = r.body.id as string;
@@ -31,7 +30,7 @@ describe('hidden Product tasks (FR-02)', () => {
     for (const [who, cookie] of [['guest', null], ['lead', lead]] as const) {
       for (const path of [
         '/api/features', '/api/features?internal=all', '/api/features?internal=1', `/api/features?q=${encodeURIComponent('тариф')}`,
-        '/api/overview', '/api/roadmap', '/api/priorities', '/api/graph', '/api/releases', '/api/epics', '/api/offers', '/api/features/RF-4',
+        '/api/overview', '/api/roadmap', '/api/priorities', '/api/graph', '/api/releases', '/api/epics', '/api/features/RF-4',
       ]) {
         const r = await app.call('GET', path, undefined, cookie);
         assert.ok(r.status === 200, `${who} ${path}: ${r.status}`);
@@ -58,7 +57,6 @@ describe('hidden Product tasks (FR-02)', () => {
     app.many('DELETE FROM feature_relations WHERE from_id = ? RETURNING 1', id);
     app.many('DELETE FROM feature_estimates WHERE feature_id = ? RETURNING 1', id);
     app.many('DELETE FROM feature_tags WHERE feature_id = ? RETURNING 1', id);
-    app.many('DELETE FROM feature_offers WHERE feature_id = ? RETURNING 1', id);
     app.many('DELETE FROM features WHERE id = ? RETURNING 1', id);
     assert.deepEqual((await app.call('GET', '/api/overview', undefined, lead)).body.kpi, kLead);
   });
@@ -77,7 +75,7 @@ describe('hidden Product tasks (FR-02)', () => {
     const card = await app.call('GET', `/api/features/${id}`, undefined, pm);
     assert.equal(card.status, 200);
     assert.equal(card.body.feature.relations.blocks.length, 1);
-    for (const path of ['/api/overview', '/api/roadmap', '/api/priorities', '/api/epics', '/api/offers', '/api/graph']) {
+    for (const path of ['/api/overview', '/api/roadmap', '/api/priorities', '/api/epics', '/api/graph']) {
       assert.ok(!text((await app.call('GET', path, undefined, pm)).body).includes(SECRET), `${path} excludes hidden tasks for product too`);
     }
     // the planner ignores it

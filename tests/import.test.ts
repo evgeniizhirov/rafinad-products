@@ -29,7 +29,7 @@ async function firstImport(app: TestApp, pm: string) {
   const run = await preview(app, pm, src);
   await resolve(app, pm, run, 'GS-EP-11', { mode: 'link', targetId: 'ep_5' });
   await resolve(app, pm, run, 'GS-106', { mode: 'link', targetId: 'feat_001' });
-  await resolve(app, pm, run, 'OF-2051', { mode: 'update', fields: { description: 'local' }, protected: {} });
+  await resolve(app, pm, run, 'RAF-530', { mode: 'update', fields: { description: 'local' }, protected: {} });
   const applied = await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm);
   assert.equal(applied.status, 200, JSON.stringify(applied.body));
   return { src, run, applied: applied.body };
@@ -44,9 +44,7 @@ async function uploadCsv(app: TestApp, cookie: string, src: string, sheets: Reco
 const countAll = (app: TestApp) => ({
   features: app.one('SELECT COUNT(*) AS n FROM features').n,
   epics: app.one('SELECT COUNT(*) AS n FROM epics').n,
-  offers: app.one('SELECT COUNT(*) AS n FROM offers').n,
   relations: app.one('SELECT COUNT(*) AS n FROM feature_relations').n,
-  featureOffers: app.one('SELECT COUNT(*) AS n FROM feature_offers').n,
   estimates: app.one('SELECT COUNT(*) AS n FROM feature_estimates').n,
 });
 
@@ -61,8 +59,8 @@ describe('import: preview and decisions', () => {
     assert.equal(item(run, 'GS-EP-11').action, 'duplicate');
     assert.equal(item(run, 'GS-106').action, 'duplicate', 'similar task is never merged automatically');
     assert.equal(item(run, 'GS-106').candidates[0].id, 'feat_001');
-    assert.equal(item(run, 'OF-2051').action, 'update', 'matched by business identifier');
-    assert.equal(item(run, 'OF-2051').diff[0].kind, 'conflict');
+    assert.equal(item(run, 'RAF-530').action, 'update', 'matched by business identifier');
+    assert.equal(item(run, 'RAF-530').diff[0].kind, 'conflict');
     assert.equal(run.unresolved.length, 3);
     const blocked = await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm);
     assert.equal(blocked.status, 400);
@@ -77,19 +75,17 @@ describe('import: preview and decisions', () => {
     const after = countAll(app);
     assert.equal(after.features - before.features, 6); // GS-106 linked to RF-1
     assert.equal(after.epics - before.epics, 1); // GS-EP-11 linked to EP-5
-    assert.equal(after.offers - before.offers, 2);
     assert.equal(applied.counts.linked, 2);
     const created = app.many(`SELECT * FROM features WHERE external_ref LIKE 'GS-%' ORDER BY number`);
     assert.ok(created.every((f: any) => f.visibility === 'draft'), 'imported cards start as drafts');
     assert.deepEqual(created.map((f: any) => f.number), [27, 28, 29, 30, 31, 32]);
     // imported estimates are marked as not manually refined
     assert.ok(app.many(`SELECT is_manual FROM feature_estimates WHERE feature_id = ?`, created[0].id).every((e: any) => e.is_manual === 0));
-    // relations: blocks, belongs_to_epic via the linked epic, affects_offer to an existing offer
+    // relations: blocks, belongs_to_epic via the linked epic
     const gs105 = created.find((f: any) => f.external_ref === 'GS-105');
     assert.equal(gs105.epic_id, 'ep_5');
-    assert.ok(app.one(`SELECT 1 AS x FROM feature_offers WHERE feature_id = ? AND offer_id = 'of_2051'`, gs105.id));
     // conflict resolved as "keep local"
-    assert.equal(app.one(`SELECT description FROM offers WHERE id = 'of_2051'`).description, '120 дней без процентов. Оплата за выпущенную карту.');
+    assert.equal(app.one(`SELECT description FROM features WHERE id = 'feat_018'`).description, 'Страница доступности трекинга, кабинета и API с историей инцидентов.');
     // linked existing card was not overwritten
     assert.equal(app.one(`SELECT description FROM features WHERE id = 'feat_001'`).description.startsWith('Передача статусов'), true);
     // drafts are invisible to guests
@@ -98,7 +94,7 @@ describe('import: preview and decisions', () => {
     const runs = (await app.call('GET', '/api/import/runs', undefined, pm)).body.runs;
     assert.equal(runs[0].status, 'applied');
     assert.equal(runs[0].created_by, 'pm');
-    assert.equal(runs[0].counts.created, 9);
+    assert.equal(runs[0].counts.created, 7); // 1 epic + 6 tasks
     assert.equal(runs[0].counts.conflicts[0].choice, 'local');
   });
 
@@ -202,11 +198,11 @@ describe('import: safety', () => {
     const pm = await app.user('pm@test.io', 'product');
     const src = await demoSource(app, pm);
     const run = await preview(app, pm, src);
-    await uploadCsv(app, pm, src, { offers: DEMO_SHEETS.offers.replace('Страхование ипотеки онлайн', 'Страхование ипотеки') });
+    await uploadCsv(app, pm, src, { epics: DEMO_SHEETS.epics.replace('Мобильное приложение вебмастера', 'Мобильное приложение') });
     const before = countAll(app);
     await resolve(app, pm, run, 'GS-EP-11', { mode: 'link', targetId: 'ep_5' });
     await resolve(app, pm, run, 'GS-106', { mode: 'skip' });
-    await resolve(app, pm, run, 'OF-2051', { mode: 'update', fields: { description: 'local' } });
+    await resolve(app, pm, run, 'RAF-530', { mode: 'update', fields: { description: 'local' } });
     const r = await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm);
     assert.equal(r.status, 409);
     assert.equal(r.body.error.code, 'stale');
@@ -221,15 +217,15 @@ describe('import: safety', () => {
     const run = await preview(app, pm, src);
     await resolve(app, pm, run, 'GS-EP-11', { mode: 'skip' });
     await resolve(app, pm, run, 'GS-106', { mode: 'skip' });
-    await resolve(app, pm, run, 'OF-2051', { mode: 'update', fields: { description: 'source' }, protected: {} });
+    await resolve(app, pm, run, 'RAF-530', { mode: 'update', fields: { description: 'source' }, protected: {} });
     // a feature that points to a skipped epic must be decided first
     const unresolved = await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm);
     assert.equal(unresolved.status, 400);
     assert.match(JSON.stringify(unresolved.body), /GS-EP-11/);
     await resolve(app, pm, run, 'GS-EP-11', { mode: 'link', targetId: 'ep_5' });
-    // someone edits the offer between preview and apply
-    const o = app.one(`SELECT version FROM offers WHERE id = 'of_2051'`);
-    assert.equal((await app.call('PATCH', '/api/offers/of_2051', { direction: 'Банки · карты', version: o.version }, pm)).status, 200);
+    // someone edits the matched card between preview and apply
+    const o = app.one(`SELECT version FROM features WHERE id = 'feat_018'`);
+    assert.equal((await app.call('PATCH', '/api/features/feat_018', { assignee_name: 'Кто-то другой', version: o.version }, pm)).status, 200);
     const before = countAll(app);
     const r = await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm);
     assert.equal(r.status, 409, JSON.stringify(r.body));
@@ -244,7 +240,7 @@ describe('import: safety', () => {
     const run = await preview(app, pm, src);
     await resolve(app, pm, run, 'GS-EP-11', { mode: 'create' });
     await resolve(app, pm, run, 'GS-106', { mode: 'create' });
-    await resolve(app, pm, run, 'OF-2051', { mode: 'skip' });
+    await resolve(app, pm, run, 'RAF-530', { mode: 'skip' });
     const before = countAll(app);
     // inject a failing statement into the middle of the transaction
     const realBatch = app.db.batch.bind(app.db);

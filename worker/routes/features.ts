@@ -29,6 +29,7 @@ const featureFields = {
   external_ref: optText(100),
   private_notes: z.string().max(5000).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  /** «Офферы» removed in vNext: still accepted (old clients, MCP) and ignored */
   offer_ids: z.array(z.string()).max(100).optional(),
   task_kind: z.enum(TASK_KINDS).optional(),
   /** release commitment to the business (FR-03); only for planned tasks */
@@ -87,9 +88,6 @@ async function validateRefs(ctx: Ctx, b: Record<string, any>) {
   ];
   for (const [v, sql, msg] of checks) if (v && !(await first(db, sql, v))) throw badRequest(msg);
   if (b.status_id && !(await first(db, `SELECT 1 FROM statuses WHERE id = ? AND entity = 'feature'`, b.status_id))) throw badRequest('Статус не найден');
-  if (b.offer_ids?.length) {
-    for (const id of b.offer_ids) if (!(await first(db, 'SELECT 1 FROM offers WHERE id = ?', id))) throw badRequest('Оффер не найден');
-  }
   if (b.estimates) {
     for (const t of Object.keys(b.estimates)) if (!(await first(db, 'SELECT 1 FROM resource_teams WHERE id = ?', t))) throw badRequest('Ресурсная команда не найдена');
   }
@@ -135,7 +133,8 @@ export function queryFeatures(p: URLSearchParams, viewer: Viewer, w: World, idx:
   filt('category', (f, v) => f.category_id === v);
   filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
   filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
-  filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
+  // offers were removed: no task belongs to any offer any more
+  if (p.get('offer')) rows = [];
   filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
   filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
   filt('stage', (f, v) => f.stage_id === v);
@@ -243,7 +242,6 @@ export function registerFeatureRoutes(r: Router) {
           sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id,
           kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0, b.urgency ?? null, b.fact_hours ?? null),
         ...[...new Set(b.tags ?? [])].map((t) => stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', id, t)),
-        ...[...new Set(b.offer_ids ?? [])].map((o) => stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', id, o, now, user.id)),
         ...Object.entries(b.estimates ?? {}).map(([t, h]) => stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?)', id, t, h, now, user.id)),
         auditStmt(db, user, 'feature', id, 'created', [
           { field: 'title', old: null, new: b.title },
@@ -311,18 +309,8 @@ export function registerFeatureRoutes(r: Router) {
         for (const t of after) statements.push(stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', f.id, t));
       }
     }
-    if (offer_ids) {
-      const before = (await all(db, 'SELECT offer_id FROM feature_offers WHERE feature_id = ? ORDER BY offer_id', f.id)).map((t) => t.offer_id);
-      const after = [...new Set(offer_ids)].sort();
-      if (JSON.stringify(before) !== JSON.stringify(after)) {
-        changes.push({ field: 'offers', old: before, new: after });
-        const now = nowIso();
-        for (const o of before.filter((x) => !after.includes(x))) statements.push(stmt(db, 'DELETE FROM feature_offers WHERE feature_id = ? AND offer_id = ?', f.id, o));
-        for (const o of after.filter((x) => !before.includes(x))) statements.push(stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', f.id, o, now, user.id));
-      }
-    }
     if (!changes.length) return json({ ok: true, unchanged: true, version: f.version });
-    if (!changes.some((c) => !['tags', 'offers'].includes(c.field))) {
+    if (!changes.some((c) => c.field !== 'tags')) {
       statements.push(stmt(db, 'UPDATE features SET updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', nowIso(), user.id, f.id));
     }
     statements.push(auditStmt(db, user, 'feature', f.id, 'updated', changes));
