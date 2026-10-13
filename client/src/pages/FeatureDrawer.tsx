@@ -372,7 +372,7 @@ function ScheduleSection({ f, canEdit }: { f: any; canEdit: boolean }) {
         >
           {pending.__code === 'over_budget' ? (
             <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {pending.__over.map((o: any, i: number) => <li key={i}>{o.month}: {o.kind === 'budget' ? `бюджет ${Math.round(o.value).toLocaleString('ru-RU')} ₽ при лимите ${Math.round(o.limit).toLocaleString('ru-RU')} ₽` : `${o.team}: ${o.value} ч при доступных ${o.limit} ч`}</li>)}
+              {pending.__over.map((o: any, i: number) => <li key={i}>{o.kind === 'budget' ? `${o.month}: бюджет ${Math.round(o.value).toLocaleString('ru-RU')} ₽ при лимите ${Math.round(o.limit).toLocaleString('ru-RU')} ₽` : `Спринт ${o.sprint}, ${o.team}: ${o.value} ч при доступных ${o.limit} ч`}</li>)}
             </ul>
           ) : <p>Задача меняет состав утверждённого релиза. Укажите причину — она попадёт в журнал.</p>}
         </ReasonModal>

@@ -31,7 +31,7 @@ export function Backlog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq]);
   const apiQs = new URLSearchParams();
-  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus']) {
+  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus', 'ids']) {
     const v = params.get(k);
     if (v) apiQs.set(k, v);
   }
@@ -41,7 +41,7 @@ export function Backlog() {
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
-  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus'].filter((k) => params.get(k)).length;
+  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus', 'ids'].filter((k) => params.get(k)).length;
   const sprints = useApi<any>(params.get('sprint') ? '/sprints' : null);
   // quick filters coming from the overview tiles / tags (not represented by the selects)
   const statusParam = params.get('status');
@@ -52,6 +52,7 @@ export function Backlog() {
     ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
     ...(params.get('sprint') ? [{ key: 'sprint', label: `Спринт ${params.get('sprint') === 'none' ? 'не указан' : (sprints.data?.sprints ?? []).find((s: any) => s.id === params.get('sprint'))?.code ?? ''}` }] : []),
     ...(params.get('focus') === '1' ? [{ key: 'focus', label: 'Фокусные задачи' }] : []),
+    ...(params.get('ids') ? [{ key: 'ids', label: `Из аналитики: ${params.get('ids')!.split(',').filter(Boolean).length} задач` }] : []),
     ...(params.get('initiator') && !params.get('initiator')!.startsWith('department:') && params.get('initiator') !== 'none' ? [{ key: 'initiator', label: `Инициатор: ${params.get('initiator')!.replace(/^(text|user):/, '')}` }] : []),
   ];
 

@@ -453,3 +453,6 @@ table.data td.c, table.data th.c { text-align: center; }
 .gantt-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--danger); opacity: .5; }
 .gantt-prod { position: absolute; top: 6px; bottom: 6px; border-left: 2px solid var(--info); }
 @media (max-width: 720px) { .gantt-row { grid-template-columns: 160px 1fr; } }
+
+/* analytics */
+.section-h { font-size: 15px; font-weight: 600; margin: 0 0 8px; }

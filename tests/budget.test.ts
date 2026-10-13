@@ -1,4 +1,4 @@
-// P04 / FR-05: monthly budget, rates by sprint, month × sprint allocation.
+// P04 / FR-05: monthly budget, rates by sprint, month × sprint allocation, team availability per sprint.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { monthlyForecast, rateOn, splitByMonth } from '../worker/domain/budget';
@@ -85,12 +85,13 @@ describe('budget API', () => {
     const s81 = app.one("SELECT * FROM sprints WHERE code = '8.1'");
     const m = app.one("SELECT * FROM accounting_months WHERE month = '2026-10'");
     assert.equal((await app.call('PUT', '/api/planning/monthly-budget', { month: '2026-10', budget_limit_rub: 10000, version: m.version }, pm)).status, 200);
-    assert.equal((await app.call('PUT', '/api/planning/monthly-capacity', { month: '2026-10', team_id: be, hours: 5 }, pm)).status, 200);
+    assert.equal((await app.call('PUT', '/api/planning/sprint-capacity', { sprint_id: s81.id, team_id: be, hours: 5 }, pm)).status, 200);
     const id = (await app.call('POST', '/api/features', { title: 'Дорогая', estimates: { [be]: 10 } }, pm)).body.id;
     const r = await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s81.id, version: 1 }, pm);
     assert.equal(r.status, 409);
     assert.equal(r.body.error.code, 'over_budget');
     assert.deepEqual(r.body.error.details.over.map((o: any) => o.kind).sort(), ['budget', 'capacity']);
+    assert.equal(r.body.error.details.over.find((o: any) => o.kind === 'capacity').sprint, '8.1');
     assert.equal((await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s81.id, version: 1, confirm_over_budget: true }, pm)).status, 400, 'reason required');
     assert.equal((await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s81.id, version: 1, confirm_over_budget: true, reason: 'Решение руководства' }, pm)).status, 200);
     const log = app.one("SELECT * FROM audit_log WHERE entity_id = ? AND action = 'scheduled'", id);
@@ -98,6 +99,32 @@ describe('budget API', () => {
     // a bug never triggers the check
     const bug = (await app.call('POST', '/api/features', { title: 'Баг', task_kind: 'bug', estimates: { [be]: 100 } }, pm)).body.id;
     assert.equal((await app.call('PATCH', `/api/features/${bug}/schedule`, { sprint_id: s81.id, version: 1 }, pm)).status, 200);
+  });
+
+  test('team availability is per sprint: two sprints of one month are checked separately; a closed sprint is frozen', async () => {
+    const app = await setup();
+    const pm = await app.user('pm@test.io', 'product');
+    await calendar(app, pm);
+    const be = app.one("SELECT id FROM resource_teams WHERE code = 'backend'").id;
+    const s81 = app.one("SELECT * FROM sprints WHERE code = '8.1'");
+    const s82 = app.one("SELECT * FROM sprints WHERE code = '8.2'");
+    await app.call('PUT', '/api/planning/sprint-capacity', { sprint_id: s81.id, team_id: be, hours: 15 }, pm);
+    await app.call('PUT', '/api/planning/sprint-capacity', { sprint_id: s82.id, team_id: be, hours: 15 }, pm);
+    const mk = async (t: string) => (await app.call('POST', '/api/features', { title: t, estimates: { [be]: 10 } }, pm)).body.id;
+    const a = await mk('A');
+    const b = await mk('B');
+    const c = await mk('C');
+    assert.equal((await app.call('PATCH', `/api/features/${a}/schedule`, { sprint_id: s81.id, version: 1 }, pm)).status, 200);
+    assert.equal((await app.call('PATCH', `/api/features/${b}/schedule`, { sprint_id: s82.id, version: 1 }, pm)).status, 200, 'another sprint of the same month has its own 15 h');
+    const over = await app.call('PATCH', `/api/features/${c}/schedule`, { sprint_id: s81.id, version: 1 }, pm);
+    assert.equal(over.status, 409);
+    assert.deepEqual(over.body.error.details.over.map((o: any) => [o.sprint, o.value, o.limit]), [['8.1', 20, 15]]);
+    const rep = (await app.call('GET', '/api/planning/budget?from=2026-10&months=1', undefined, pm)).body;
+    const r81 = rep.sprints.find((s: any) => s.code === '8.1');
+    assert.equal(r81.load[be], 10);
+    assert.equal(r81.capacity[be], 15);
+    app.many("UPDATE sprints SET status = 'closed' WHERE id = ? RETURNING 1", s81.id);
+    assert.equal((await app.call('PUT', '/api/planning/sprint-capacity', { sprint_id: s81.id, team_id: be, hours: 99 }, pm)).status, 409);
   });
 
   test('access: leads cannot read or change budgets; only admins manage rates', async () => {

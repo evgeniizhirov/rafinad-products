@@ -1,4 +1,5 @@
-// Monthly budget and availability (FR-05): rates by sprint, month limits and capacities, forecast, month close.
+// Monthly budget and availability (FR-05): rates by sprint, rouble limit per calendar month, forecast, month close;
+// team availability is one number per team per sprint (owner decision 13.10).
 import { z } from 'zod';
 import { monthlyForecast, type Allocation, type BudgetTask, type RateRow } from '../domain/budget';
 import { addMonths, monthDates } from '../domain/calendar';
@@ -45,20 +46,42 @@ export async function budgetReport(ctx: Ctx, w: World, idx: Indexes, months: str
   const tasks = budgetTasks(w, idx).filter((t) => t.id !== extra?.id);
   if (extra) tasks.push(extra);
   const forecast = monthlyForecast(tasks, rates, teams, method);
-  const caps = await all(ctx.env.DB, 'SELECT * FROM month_capacities');
   const snaps = new Map((await all(ctx.env.DB, 'SELECT * FROM month_snapshots')).map((s) => [s.month_id, s]));
   return months.map((m) => {
     const row = w.months.find((x) => x.month === m);
     const snap = row ? snaps.get(row.id) : undefined;
     if (snap) return { ...parseJson<Row>(snap.data, {}), month: m, id: row!.id, status: 'closed', snapshot_at: snap.created_at, version: row!.version };
     const f = forecast.get(m) ?? { month: m, cost: 0, hours: {}, incomplete: 0, tasks: [] };
-    const capacity = Object.fromEntries(caps.filter((c) => c.month_id === row?.id).map((c) => [c.team_id, Number(c.hours)]));
     const limit = row?.budget_limit_rub ?? null;
     return {
       month: m, id: row?.id ?? null, status: row?.status ?? 'missing', version: row?.version ?? null, forecast: true, method,
       budget_limit_rub: limit, cost: f.cost, over_budget: limit !== null && f.cost > limit,
-      hours: f.hours, capacity, over_capacity: Object.entries(f.hours).filter(([t, h]) => capacity[t] !== undefined && h > capacity[t]).map(([t]) => t),
+      hours: f.hours,
       incomplete: f.incomplete, tasks: f.tasks,
+    };
+  });
+}
+
+/** planned hours per team in a sprint: full estimates of the plannable tasks placed in it (no month split) */
+export function sprintLoad(w: World, idx: Indexes, sprintId: string, extra?: { id: string; estimates: Record<string, number> }) {
+  const load: Record<string, number> = {};
+  const add = (est: Record<string, number>) => { for (const [t, h] of Object.entries(est)) load[t] = Math.round(((load[t] ?? 0) + h) * 100) / 100; };
+  for (const t of budgetTasks(w, idx)) {
+    if (t.id === extra?.id || idx.feature.get(t.id)?.sprint_id !== sprintId) continue;
+    add(t.estimates);
+  }
+  if (extra) add(extra.estimates);
+  return load;
+}
+
+export async function sprintCapacityReport(ctx: Ctx, w: World, idx: Indexes, sprints: Row[]) {
+  const caps = await all(ctx.env.DB, 'SELECT * FROM sprint_capacities');
+  return sprints.map((s) => {
+    const capacity = Object.fromEntries(caps.filter((c) => c.sprint_id === s.id).map((c) => [c.team_id, Number(c.hours)]));
+    const load = sprintLoad(w, idx, s.id);
+    return {
+      id: s.id, code: s.code, start_date: s.start_date, end_date: s.end_date, status: s.status,
+      load, capacity, over_capacity: Object.entries(load).filter(([t, h]) => capacity[t] !== undefined && h > capacity[t]).map(([t]) => t),
     };
   });
 }
@@ -73,8 +96,12 @@ export function registerBudgetRoutes(r: Router) {
     if (!/^\d{4}-\d{2}$/.test(from)) throw badRequest('Месяц в формате ГГГГ-ММ');
     const months = Array.from({ length: count }, (_, i) => addMonths(from, i));
     const rates = await loadRates(ctx, w);
+    const first = `${months[0]}-01`;
+    const last = monthDates(months[months.length - 1]).end_date;
+    const sprints = w.sprints.filter((s) => s.end_date >= first && s.start_date <= last).sort((a, b) => (a.start_date < b.start_date ? -1 : 1));
     return json({
       months: await budgetReport(ctx, w, idx, months),
+      sprints: await sprintCapacityReport(ctx, w, idx, sprints),
       teams: w.teams.filter((t) => bool(t.is_active)).map((t) => ({ id: t.id, code: t.code, name: t.name, color: t.color })),
       rates: w.teams.map((t) => {
         const cur = rates.filter((x) => x.team_id === t.id).sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1));
@@ -98,22 +125,23 @@ export function registerBudgetRoutes(r: Router) {
     return json({ ok: true });
   });
 
-  r.put('/api/planning/monthly-capacity', async (ctx) => {
+  /** guaranteed hours of a team for one sprint (team aggregate, not per employee) */
+  r.put('/api/planning/sprint-capacity', async (ctx) => {
     const user = requirePerm(ctx, perms.plan);
-    const b = await readJson(ctx, z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), team_id: z.string(), hours: z.number().min(0).max(100000).nullable() }));
+    const b = await readJson(ctx, z.object({ sprint_id: z.string(), team_id: z.string(), hours: z.number().min(0).max(100000).nullable() }));
     const db = ctx.env.DB;
-    const m = await first(db, 'SELECT * FROM accounting_months WHERE month = ?', b.month);
-    if (!m) throw notFound('Месяц не создан — сгенерируйте календарь');
-    if (m.status === 'closed') throw conflict('closed', 'Месяц закрыт: его расчёт зафиксирован');
+    const sp = await first(db, 'SELECT * FROM sprints WHERE id = ?', b.sprint_id);
+    if (!sp) throw notFound('Спринт не найден');
+    if (sp.status === 'closed') throw conflict('closed', 'Спринт закрыт: его доступность не меняется');
     if (!(await first(db, 'SELECT 1 FROM resource_teams WHERE id = ?', b.team_id))) throw badRequest('Команда не найдена');
-    const cur = await first(db, 'SELECT * FROM month_capacities WHERE month_id = ? AND team_id = ?', m.id, b.team_id);
+    const cur = await first(db, 'SELECT * FROM sprint_capacities WHERE sprint_id = ? AND team_id = ?', sp.id, b.team_id);
     const now = nowIso();
     await tx(db, [
       b.hours === null
-        ? stmt(db, 'DELETE FROM month_capacities WHERE month_id = ? AND team_id = ?', m.id, b.team_id)
-        : stmt(db, `INSERT INTO month_capacities (month_id, team_id, hours, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(month_id, team_id) DO UPDATE SET hours = excluded.hours, updated_at = excluded.updated_at, updated_by = excluded.updated_by, version = version + 1`, m.id, b.team_id, b.hours, now, user.id),
-      auditStmt(db, user, 'budget', m.id, 'capacity_changed', [{ field: `hours:${b.team_id}`, old: cur?.hours ?? null, new: b.hours }]),
+        ? stmt(db, 'DELETE FROM sprint_capacities WHERE sprint_id = ? AND team_id = ?', sp.id, b.team_id)
+        : stmt(db, `INSERT INTO sprint_capacities (sprint_id, team_id, hours, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(sprint_id, team_id) DO UPDATE SET hours = excluded.hours, updated_at = excluded.updated_at, updated_by = excluded.updated_by, version = version + 1`, sp.id, b.team_id, b.hours, now, user.id),
+      auditStmt(db, user, 'sprint', sp.id, 'capacity_changed', [{ field: `hours:${b.team_id}`, old: cur?.hours ?? null, new: b.hours }]),
     ]);
     return json({ ok: true });
   });
@@ -172,7 +200,7 @@ export function registerBudgetRoutes(r: Router) {
   });
 }
 
-/** monthly budget / capacity check when a task enters a sprint (manual mode: explicit confirmation with a reason) */
+/** monthly rouble limit + sprint team availability check when a task enters a sprint (manual mode: explicit confirmation with a reason) */
 export async function budgetImpact(ctx: Ctx, featureId: string, sprintId: string) {
   const w = await loadWorld(ctx.env.DB, 'editor');
   const idx = indexWorld(w);
@@ -187,10 +215,13 @@ export async function budgetImpact(ctx: Ctx, featureId: string, sprintId: string
   const months = [...new Set([task.from.slice(0, 7), task.to.slice(0, 7), s.start_date.slice(0, 7), s.end_date.slice(0, 7)])].sort();
   const report = await budgetReport(ctx, w, idx, months, task);
   const names = new Map(w.teams.map((t) => [t.id, t.name]));
-  return report.flatMap((m: any) => [
-    ...(m.over_budget ? [{ month: m.month, kind: 'budget', limit: m.budget_limit_rub, value: m.cost }] : []),
-    ...((m.over_capacity ?? []) as string[]).map((t) => ({ month: m.month, kind: 'capacity', team: names.get(t) ?? t, limit: m.capacity[t], value: m.hours[t] })),
-  ]);
+  const caps = await all(ctx.env.DB, 'SELECT * FROM sprint_capacities WHERE sprint_id = ?', s.id);
+  const load = sprintLoad(w, idx, s.id, task);
+  return [
+    ...report.flatMap((m: any) => (m.over_budget ? [{ month: m.month, kind: 'budget', limit: m.budget_limit_rub, value: m.cost }] : [])),
+    ...caps.filter((c) => (load[c.team_id] ?? 0) > Number(c.hours))
+      .map((c) => ({ sprint: s.code, kind: 'capacity', team: names.get(c.team_id) ?? c.team_id, limit: Number(c.hours), value: load[c.team_id] })),
+  ];
 }
 
 export { monthDates };

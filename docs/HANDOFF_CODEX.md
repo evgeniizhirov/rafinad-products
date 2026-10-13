@@ -15,12 +15,30 @@
 | P05 баги/доработки, импорт «Прием обращений» (FR-07, FR-09) | `claude/05-bugs-import` | #6 | 0005 | готово; реальное чтение через SA проверить после деплоя |
 | P06 главная: Гант, цели, блокеры, релизы (FR-03) | `claude/06-overview-gantt` | #7 | 0006 | готово |
 | P07 API-ключи (FR-01) | `claude/07-api-keys` | #8 | 0007 | готово |
-| P08 экспорт XLSX / Google | — | — | — | не начат |
-| P04 бюджеты и ставки (FR-05) | — | — | — | не начат; месяцы и спринты уже есть (P03) |
-| P09 аналитика (FR-11) | — | — | — | не начат; `baseline_production_date`, `api_key_id`, бизнес-блокеры уже пишутся |
-| P10 интеграционный релиз | — | — | — | не начат |
+| P08 экспорт XLSX / Google «Import» (FR-08) | `claude/08-export` | #9 | 0008 | готово; запись в реальную таблицу проверить после деплоя (нужна целевая таблица и SA с правом «Редактор») |
+| P04 бюджеты и ставки (FR-05) | `claude/04-monthly-budget` | #10 | 0009 | готово; в стопке после P08 |
+| P09 аналитика (FR-11) | `claude/09-analytics` | #11 | 0010 | готово |
+| Решения владельца 13.10: ёмкость на спринт, колонки экспорта TaskFlow | `claude/10-owner-decisions` | #12 | 0011 | готово |
+| P10 интеграционный релиз | — | — | — | не начат; чек-лист ниже |
 
-**Выкладка стопки:** бэкап D1 → `npm run db:migrate:remote` (миграции 0003–0007, все аддитивные) → merge PR по порядку (каждый merge в `main` = деплой). Миграции безопасны для текущего кода прода, поэтому их можно применить заранее.
+**Выкладка стопки:** бэкап D1 → `npm run db:migrate:remote` (миграции 0003–0011; 0011 удаляет `month_capacities` из 0009 — таблица на прод не попадала) → merge PR по порядку (каждый merge в `main` = деплой). Миграции безопасны для текущего кода прода, поэтому их можно применить заранее.
+
+## P10 — чек-лист интеграционного релиза (для Codex / владельца)
+
+1. Ревью PR #2–#12. Порядок модулей и решения — `docs/IMPLEMENTATION_NOTES.md`; решения владельца от 13.10 — там же, в последнем разделе.
+2. Бэкап D1 (`wrangler d1 export`). Затем `npm run db:migrate:remote` — **только с разрешения владельца**. Проверить, что в `d1_migrations` появились 0003–0011.
+3. Merge #2 → … → #12 по порядку. Каждый merge — деплой. Можно сначала собрать стопку в одну интеграционную ветку и смержить один раз.
+4. Smoke на проде:
+   - вход;
+   - «Обзор» (Гант, фокус, блокеры);
+   - «Спринты»: сгенерировать календарь от якоря 8 / 2026-10-07 (предпросмотр → подтверждение);
+   - «Бюджет»: начальные ставки;
+   - «Аналитика»;
+   - выпуск и отзыв API-ключа;
+   - XLSX-экспорт.
+5. Источники «Баги» / «Доработки»: «Синхронизация» → «Подключить баги и доработки». Открыть таблицу `1woBVsLq…` сервисному аккаунту как «Читатель», проверить подключение, первый предпросмотр.
+6. Google-экспорт: в админке указать целевую таблицу, дать SA «Редактор», создать лист `Import`, выгрузить пробно.
+7. Открытые вопросы ТЗ закрыты 13.10 (PR #12). Порог высокого приоритета (4) — на время тестирования, может измениться.
 
 ## Где что
 
@@ -35,7 +53,7 @@
 ## Архитектура
 
 - **Worker** (`worker/index.ts`): свой роутер `worker/lib/http.ts` (`Router`, `readJson` с zod, `HttpError`, `json`). Отдаёт `/api/*` и статику клиента из `dist/client` (binding `ASSETS`, SPA fallback, `run_worker_first`).
-- **Маршруты** `worker/routes/*`: `auth`, `admin` (пользователи, справочники, настройки, аудит), `catalog` (эпики, офферы, `/api/meta`), `features` (задачи, голоса, оценки, связи, комментарии, размещение), `merge`, `priorities`, `dashboard` (`/api/overview`, `/api/roadmap`, `/api/graph`), `planning` (мощности, предложение плана, алерты), `releases`, `imports` (синхронизация с таблицами).
+- **Маршруты** `worker/routes/*`: `auth`, `admin` (пользователи, справочники, настройки, аудит), `catalog` (эпики, офферы, `/api/meta`), `features` (задачи, голоса, оценки, связи, комментарии, размещение), `merge`, `priorities`, `dashboard` (`/api/overview`, `/api/roadmap`, `/api/graph`), `planning` (мощности, предложение плана, алерты), `releases`, `imports` (синхронизация с таблицами). В стопке добавлены `calendar` (спринты, месяцы, расписание), `apikeys`, `exports`, `budget`, `analytics`; домен — `calendar.ts`, `budget.ts`, `xlsx.ts`, `exportTable.ts`, `analytics.ts`. Подробности по каждому модулю — `docs/IMPLEMENTATION_NOTES.md`.
 - **Домен** `worker/domain/*`: `priority.ts` (рейтинг по голосам отделов), `capacity.ts` + `planner.ts` (планирование), `graph.ts` (циклы блокировок), `importer.ts` (предпросмотр/дифф импорта), `flatSheet.ts` (формат «одна таблица задач», пресет TaskFlow), `csv.ts`, `text.ts`.
 - **`worker/lib/world.ts`** — загружает весь каталог одним batch и считает DTO, флаги (`hasFlag`: open/blocked/unvoted/unestimated), `isClosed`, `openBlockerIds`. Большинство GET-маршрутов строится поверх него.
 - **Запись**: `tx(db, stmts)` = `D1.batch` (атомарно). Оптимистическая блокировка через `guardVersion` — вставка в `_guard` с CHECK, падение = откат всего batch → 409 `version_conflict`. Аудит — `auditStmt` (`worker/lib/audit.ts`) в том же batch.
@@ -48,7 +66,7 @@
 ```bash
 npm install                 # postinstall собирает клиент
 npm run typecheck           # tsc для worker/, tests/, scripts/ (клиент tsc НЕ проверяет — нет @types/react)
-npm test                    # tsx --test tests/*.test.ts — 107 тестов на вершине стопки (claude/07-api-keys)
+npm test                    # tsx --test tests/*.test.ts — 123 теста на вершине стопки (claude/10-owner-decisions)
 npm run build               # сборка клиента (esbuild) — единственная проверка клиентского кода
 npm run dev:node            # http://localhost:8788, БД .local/dev.sqlite, демо-данные + admin@rafinad.test (пароль печатается при первом запуске; можно задать ADMIN_EMAIL/ADMIN_PASSWORD)
 ```
@@ -66,6 +84,10 @@ npm run dev:node            # http://localhost:8788, БД .local/dev.sqlite, д�
 | 5 | `0005_bug_flow.sql` — срочность, факт часов | нет (PR #6) |
 | 6 | `0006_business_blockers.sql` — бизнес-блокеры | нет (PR #7) |
 | 7 | `0007_api_keys.sql` — API-ключи, `audit_log.api_key_id` | нет (PR #8) |
+| 8 | `0008_exports.sql` — `export_runs`, настройки экспорта в Google | нет (PR #9) |
+| 9 | `0009_budget.sql` — ставки команд, ёмкость и снимки месяцев | нет (PR #10) |
+| 10 | `0010_analytics.sql` — индекс audit, порог высокого приоритета | нет (PR #11) |
+| 11 | `0011_sprint_capacity.sql` — доступность команд на спринт вместо месяца | нет (PR #12) |
 
 - **Workers Builds миграции не запускает** (у токена сборки нет прав на D1). Новые миграции применять отдельно, `npm run db:migrate:remote`, **только с разрешения владельца** и до деплоя кода, который их требует.
 - Миграции только аддитивные: схема уже содержит прод-данные.
@@ -79,7 +101,7 @@ npm run dev:node            # http://localhost:8788, БД .local/dev.sqlite, д�
 
 ## Секреты и runtime-настройки Cloudflare (значения не копировать)
 
-- `GOOGLE_SERVICE_ACCOUNT_JSON` — secret, JSON-ключ read-only сервисного аккаунта Google. Задан на проде 12.10, таблица TaskFlow расшарена; «Проверить подключение» успешно. Используется в `worker/lib/google.ts` (`serviceAccount`, `fetchSpreadsheet`), scope `spreadsheets.readonly`.
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — secret, JSON-ключ read-only сервисного аккаунта Google. Задан на проде 12.10, таблица TaskFlow расшарена; «Проверить подключение» успешно. Используется в `worker/lib/google.ts` (`serviceAccount`, `fetchSpreadsheet`), scope `spreadsheets.readonly`. Экспорт (P08) запрашивает scope `spreadsheets` с тем же ключом: целевую таблицу нужно открыть сервисному аккаунту как «Редактор», лист `Import` создать заранее. Остальные таблицы остаются «Читатель».
 - `COOKIE_SECURE` — var, `"0"` только для локального http. На проде не задавать.
 - `__FETCH` — тестовый хук, на проде не задаётся.
 - Пароли пользователей — PBKDF2 (`worker/lib/crypto.ts`), сессии в `sessions`.
