@@ -8,6 +8,7 @@ import { Backlog } from './pages/Backlog';
 import { Epics } from './pages/Epics';
 import { FeatureDrawer } from './pages/FeatureDrawer';
 import { Overview } from './pages/Overview';
+import { Planner } from './pages/Planner';
 import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
 import { Calendar } from './pages/Calendar';
@@ -36,6 +37,7 @@ const NAV = [
   { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
   { to: '/calendar', label: 'Спринты', icon: I.calendar },
+  { to: '/planner', label: 'Планировщик', icon: I.board, plan: true },
   { to: '/budget', label: 'Бюджет', icon: I.priorities, plan: true },
   { to: '/analytics', label: 'Аналитика', icon: I.analytics, member: true },
 ];
@@ -93,6 +95,7 @@ function Routes() {
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;
     case 'calendar': return <Calendar />;
     case 'budget': return <Budget />;
+    case 'planner': return <Planner />;
     case 'analytics': return <Analytics />;
     case 'proposals': return seg[1] ? <ProposalDetail id={seg[1]} /> : <Proposals />;
     case 'sync': return <Sync />;

@@ -517,6 +517,23 @@ table.data td.c, table.data th.c { text-align: center; }
 .overview-kpis .kpi b { font-size: 20px; }
 .compact-list .list-item { padding-top: 7px; padding-bottom: 7px; }
 
+/* Product planner (vNext §6) */
+.planner { display: grid; grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.6fr); gap: 16px; align-items: start; }
+.planner-queue { position: sticky; top: 12px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; }
+.planner-queue > .list { overflow-y: auto; min-height: 120px; }
+.planner-sprints { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+.planner-task { gap: 8px; padding: 8px 12px; cursor: grab; }
+.planner-task .rank { width: 30px; flex: none; text-align: right; }
+.planner-task .select { width: auto; max-width: 118px; flex: none; }
+.planner-task.busy { opacity: .5; pointer-events: none; }
+.drop-on { outline: 2px dashed var(--beet); outline-offset: 2px; }
+.planner-budget .kpi b { font-size: 18px; }
+@media (max-width: 960px) {
+  .planner { grid-template-columns: minmax(0, 1fr); }
+  .planner-queue { position: static; max-height: none; }
+  .planner-sprints { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* analytics */
 .section-h { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
 

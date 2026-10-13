@@ -152,8 +152,9 @@ PR идут цепочкой, каждый от предыдущего; merge, �
 | v2-02 «Предложения» | `claude/v2-02-proposals` | 0014 |
 | v2-05 этапы задачи | `claude/v2-05-phases` | 0015 |
 | v2-06 общий Гант и «Обзор» (`GET /api/gantt`) | `claude/v2-06-gantt` | — |
+| v2-07 планировщик Product (`/planner`, `GET /api/planner`) | `claude/v2-07-planner` | — |
 
-Дальше по плану: v2-07 планировщик Product (`/api/gantt?scope=planner` уже есть), v2-08 удаление навсегда, v2-09 конструктор экспорта, v2-10 удаление старых плановых периодов.
+Дальше по плану: v2-08 удаление навсегда, v2-09 конструктор экспорта, v2-10 удаление старых плановых периодов.
 
 Для MCP-интеграции (`codex/roadmap-chatgpt-mcp`): ключи `/overview`, `/calendar`, `/analytics/summary`, `/features/:id/schedule`, `stage_id`, `external_ref` не менялись; Гант — отдельный эндпоинт.
 
