@@ -22,7 +22,9 @@ export class Roadmap {
     let response: Response;
     try {
       response = await this.fetcher(url, {
-        method, redirect: 'error', signal: AbortSignal.timeout(15000),
+        // Cloudflare Service Binding supports only 'manual' or 'follow' redirect modes.
+        // Never follow redirects: reject 3xx responses below before reading JSON.
+        method, redirect: 'manual', signal: AbortSignal.timeout(15000),
         headers: { authorization: `Bearer ${this.key}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
@@ -34,6 +36,10 @@ export class Roadmap {
         console.warn(JSON.stringify({ event: 'roadmap_transport_failed', category, detail }));
       }
       throw new RoadmapError(502, 'unknown_result', 'Roadmap не ответил. Результат записи неизвестен: не повторяйте её автоматически, сначала проверьте данные.');
+    }
+    // A manual redirect must not be interpreted as data or followed with the API key.
+    if (response.status >= 300 && response.status < 400) {
+      throw new RoadmapError(502, 'redirect_refused', 'Roadmap перенаправил запрос. Переход запрещён, запрос не повторялся.');
     }
     let data: any;
     try { data = await response.json(); } catch {
