@@ -7,7 +7,7 @@ import {
   type ImportConfig, type ItemDraft, type Resolution, type SheetKey, type SheetsData, type Snapshot,
 } from '../domain/importer';
 import { DEMO_SHEETS } from '../demoData';
-import { TASKFLOW_CONFIG } from '../domain/flatSheet';
+import { BUGS_CONFIG, BUGS_SPREADSHEET_ID, IMPROVEMENTS_CONFIG, TASKFLOW_CONFIG } from '../domain/flatSheet';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
 import { sha256Hex } from '../lib/crypto';
@@ -23,7 +23,14 @@ const flatSchema = z.object({
   columns: z.object({
     id: optCol, title: colName, description: optCol, category: optCol, assignee: optCol,
     deadline: z.array(colName).max(5).optional(), closed_at: optCol, done: optCol, priority: optCol, fact_hours: optCol,
+    id_pattern: z.string().max(100).optional().refine((v) => { if (!v) return true; try { new RegExp(v); return true; } catch { return false; } }, 'Некорректное регулярное выражение'),
+    status: optCol, urgency: optCol, requested_at: optCol, initiator: optCol, author: optCol,
+    extra: z.array(colName).max(20).optional(),
   }),
+  kind: z.enum(['planned', 'bug', 'operational_improvement']).optional(),
+  status_map: z.record(z.string().max(60), z.enum(['new', 'analysis', 'ready', 'planned', 'in_progress', 'blocked', 'postponed', 'done', 'cancelled'])).optional(),
+  urgency_map: z.record(z.string().max(60), z.enum(['low', 'medium', 'high', 'critical'])).optional(),
+  fact_hours_as: z.enum(['description', 'field']).optional(),
   flags: z.record(colName, z.string().trim().min(1).max(40)).default({}),
   hours: z.record(colName, z.string().trim().min(1).max(40)).default({}),
 });
@@ -99,12 +106,14 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT id, code, name FROM resource_teams WHERE is_active = 1 ORDER BY sort_order'),
     q('SELECT entity_type, external_id, entity_id, last_values FROM source_entity_links WHERE source_id = ?', sourceId),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version FROM epics'),
-    q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at, assignee_name, planned_end FROM features'),
+    q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at, assignee_name, planned_end, urgency, fact_hours FROM features'),
     q('SELECT id, name AS title, description, category_id, status_id, external_code AS external_ref, version FROM offers'),
     q('SELECT type, from_id, to_id FROM feature_relations'),
     q('SELECT feature_id, offer_id FROM feature_offers'),
     q('SELECT feature_id, team_id, hours, is_manual FROM feature_estimates'),
     q('SELECT feature_id, tag FROM feature_tags ORDER BY tag'),
+    q('SELECT id, name FROM departments'),
+    q('SELECT id, name FROM users WHERE is_active = 1'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
@@ -128,6 +137,8 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     offers: r(7) as Snapshot['offers'],
     relations: r(8) as Snapshot['relations'],
     featureOffers: r(9) as Snapshot['featureOffers'],
+    departments: r(12) as Snapshot['departments'],
+    users: r(13) as Snapshot['users'],
   };
 }
 
@@ -269,11 +280,15 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         } else {
           const epicId = resolveExt('epic', pl.epic_ext);
           if (pl.epic_ext && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${pl.epic_ext}» пропущен или не найден — измените решение по эпику`);
+          const ini = pl.initiator as { type: string; id: string | null; name: string } | null | undefined;
           st.push(stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, requested_at, closed_at,
-              assignee_name, planned_end, visibility, created_at, updated_at, created_by, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              assignee_name, planned_end, visibility, created_at, updated_at, created_by, updated_by,
+              task_kind, urgency, fact_hours, author_name, initiator_type, initiator_user_id, initiator_department_id, initiator_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             p.id, p.number, pl.derived_id ? null : ext, pl.title, pl.description ?? '', pl.category_id ?? null, epicId, status, pl.stage_id ?? null, pl.requested_at ?? today,
-            doneStatuses.has(status) ? pl.closed_at ?? today : null, pl.assignee_name ?? null, pl.planned_end ?? null, newVisibility, now, now, user.id, user.id));
+            doneStatuses.has(status) ? pl.closed_at ?? today : null, pl.assignee_name ?? null, pl.planned_end ?? null, newVisibility, now, now, user.id, user.id,
+            pl.task_kind ?? 'planned', pl.urgency ?? null, pl.fact_hours ?? null, pl.author_name ?? null,
+            ini?.type ?? null, ini?.type === 'user' ? ini.id : null, ini?.type === 'department' ? ini.id : null, ini?.name ?? null));
           for (const tag of pl.tags ?? []) st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) VALUES (?, ?)', p.id, tag));
           for (const [teamId, h] of Object.entries(pl.estimates ?? {})) {
             st.push(stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 0, ?, ?)', p.id, teamId, h, now, user.id));
@@ -395,6 +410,11 @@ export function registerImportRoutes(r: Router) {
       sources: out, service_account_email: sa?.client_email ?? null, columns: SHEET_COLUMNS,
       default_config: { ...DEFAULT_IMPORT_CONFIG, format: 'template', newVisibility: 'draft' },
       flat_preset: { ...DEFAULT_IMPORT_CONFIG, format: 'flat', flat: TASKFLOW_CONFIG, newVisibility: 'internal' },
+      // «Прием обращений по багам/доработкам»: one source per tab (different work types)
+      bug_presets: [
+        { name: 'Баги (прием обращений)', spreadsheet_id: BUGS_SPREADSHEET_ID, config: { ...DEFAULT_IMPORT_CONFIG, format: 'flat', flat: BUGS_CONFIG, newVisibility: 'internal' } },
+        { name: 'Доработки (прием обращений)', spreadsheet_id: BUGS_SPREADSHEET_ID, config: { ...DEFAULT_IMPORT_CONFIG, format: 'flat', flat: IMPROVEMENTS_CONFIG, newVisibility: 'internal' } },
+      ],
     });
   });
 
@@ -488,15 +508,16 @@ export function registerImportRoutes(r: Router) {
       const { data, notes, title } = await readSource(ctx, s);
       for (const w of sourceSheetNames(config)) {
         const rows = data[w.key];
-        const header = (rows?.[0] ?? []).map((h) => h.trim().toLowerCase());
+        const header = (rows?.[0] ?? []).map((h) => h.replace(/\s+/g, ' ').trim().toLowerCase());
         let required: string[];
         if (w.key === 'flat') {
           const c = config.flat!.columns;
           required = [c.title, c.id, c.description, c.category, c.assignee, c.closed_at, c.done, c.priority, c.fact_hours, ...(c.deadline ?? []),
+            c.status, c.urgency, c.requested_at, c.initiator, c.author, ...(c.extra ?? []),
             ...Object.keys(config.flat!.flags ?? {}), ...Object.keys(config.flat!.hours ?? {})].filter((x): x is string => !!x);
         } else required = SHEET_COLUMNS[w.key].required;
         const dataRows = rows ? rows.slice(1).filter((r) => r.some((c) => String(c ?? '').trim())).length : 0;
-        sheets.push({ key: w.key, name: w.name, found: !!rows, rows: dataRows, missing_columns: rows ? required.filter((c) => !header.includes(c.trim().toLowerCase())) : [] });
+        sheets.push({ key: w.key, name: w.name, found: !!rows, rows: dataRows, missing_columns: rows ? [...new Set(required.filter((c) => !header.includes(c.replace(/\s+/g, ' ').trim().toLowerCase())))] : [] });
       }
       const titleMissing = config.format === 'flat' && sheets[0]?.missing_columns.includes(config.flat!.columns.title);
       ok = sheets.some((x) => x.found) && !titleMissing && (config.format === 'flat' || sheets.every((x) => !x.found || x.missing_columns.length === 0));
