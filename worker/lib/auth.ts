@@ -13,6 +13,59 @@ export interface SessionUser {
   departmentIds: string[];
   mustChangePassword: boolean;
   sessionId: string;
+  /** set when the request is authenticated with a personal API key (FR-01) */
+  apiKey?: { id: string; scopes: string[] };
+}
+
+export const API_SCOPES = ['tasks:read', 'tasks:create', 'tasks:update', 'priorities:write-own', 'exports:read'] as const;
+export type ApiScope = (typeof API_SCOPES)[number];
+export const API_RATE_PER_MINUTE = 120;
+
+/** API key → user. Every request re-reads the user, role, memberships and the key state (revoked / expired). */
+export async function loadApiKeyUser(env: Env, req: Request): Promise<SessionUser | null | 'invalid' | 'rate_limited'> {
+  const h = req.headers.get('authorization') || '';
+  const m = /^Bearer\s+(rr_([a-z0-9]{8})_[A-Za-z0-9]{24,64})$/.exec(h.trim());
+  if (!h) return null;
+  if (!m) return 'invalid';
+  const [, token, prefix] = m;
+  const key = await first(env.DB, 'SELECT * FROM api_keys WHERE prefix = ?', prefix);
+  if (!key || key.secret_hash !== (await sha256Hex(token))) return 'invalid';
+  const now = nowIso();
+  if (key.revoked_at || key.expires_at <= now) return 'invalid';
+  const u = await first(env.DB, 'SELECT id, email, name, role_code, must_change_password, is_active FROM users WHERE id = ?', key.owner_id);
+  if (!u || !u.is_active) return 'invalid';
+  // usage + 1-minute rate window in one write
+  const windowFrom = new Date(Date.now() - 60_000).toISOString();
+  const usage = await first<{ window_count: number }>(env.DB,
+    `UPDATE api_keys SET use_count = use_count + 1, last_used_at = ?,
+       window_count = CASE WHEN window_start IS NOT NULL AND window_start > ? THEN window_count + 1 ELSE 1 END,
+       window_start = CASE WHEN window_start IS NOT NULL AND window_start > ? THEN window_start ELSE ? END
+     WHERE id = ? RETURNING window_count`, now, windowFrom, windowFrom, now, key.id);
+  if ((usage?.window_count ?? 0) > API_RATE_PER_MINUTE) return 'rate_limited';
+  const deps = await all<{ department_id: string }>(env.DB, 'SELECT department_id FROM department_memberships WHERE user_id = ?', u.id);
+  return {
+    id: u.id, email: u.email, name: u.name, role: u.role_code as Role, departmentIds: deps.map((d) => d.department_id),
+    mustChangePassword: !!u.must_change_password, sessionId: `key:${key.id}`,
+    apiKey: { id: key.id, scopes: (() => { try { return JSON.parse(key.scopes) as string[]; } catch { return []; } })() },
+  };
+}
+
+/**
+ * Scope required for an API-key request; null = not available to API keys at all
+ * (key management, admin, import, planning writes, auth). Effective rights = RBAC ∩ scope.
+ */
+export function scopeFor(method: string, path: string): ApiScope | null {
+  if (method === 'GET') {
+    if (/^\/api\/(features|overview|priorities|releases|epics|offers|calendar|sprints|roadmap|graph|meta|analytics|auth\/me)(\/|$)/.test(path)) return 'tasks:read';
+    if (/^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
+    return null;
+  }
+  if (method === 'POST' && path === '/api/features') return 'tasks:create';
+  if (method === 'POST' && /^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
+  if (method === 'PUT' && /^\/api\/features\/[^/]+\/votes\/[^/]+$/.test(path)) return 'priorities:write-own';
+  if (/^(PATCH|POST|PUT)$/.test(method) && /^\/api\/features\/[^/]+(\/(schedule|relations|comments|estimates|blockers))?$/.test(path)) return 'tasks:update';
+  if (method === 'PATCH' && /^\/api\/blockers\/[^/]+$/.test(path)) return 'tasks:update';
+  return null;
 }
 
 export const SESSION_COOKIE = 'rr_session';
@@ -74,11 +127,15 @@ export const perms = {
   editCatalog: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
   seeDrafts: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
   comment: (u: SessionUser | null) => !!u,
+  // FR-04: membership is re-read from department_memberships on every request (loadSessionUser),
+  // so a change applies to existing sessions immediately. Future API keys (FR-01) must go through
+  // the same check: a `priorities:write-own` scope never replaces the current membership.
   voteFor: (u: SessionUser | null, departmentId: string) => !!u && u.departmentIds.includes(departmentId),
-  overrideVote: (u: SessionUser | null) => !!u && u.role === 'admin',
+  // an API key never acts as an administrator on behalf of another department
+  overrideVote: (u: SessionUser | null) => !!u && u.role === 'admin' && !u.apiKey,
   plan: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
   import: (u: SessionUser | null) => !!u && (u.role === 'product' || u.role === 'admin'),
-  admin: (u: SessionUser | null) => !!u && u.role === 'admin',
+  admin: (u: SessionUser | null) => !!u && u.role === 'admin' && !u.apiKey,
 };
 
 export function requireUser(ctx: Ctx): SessionUser {

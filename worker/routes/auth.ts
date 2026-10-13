@@ -29,6 +29,7 @@ export function meDto(ctx: Ctx) {
       permissions: {
         edit_catalog: perms.editCatalog(u), plan: perms.plan(u), import: perms.import(u), admin: perms.admin(u), comment: perms.comment(u),
       },
+      ...(u.apiKey ? { api_key: { id: u.apiKey.id, scopes: u.apiKey.scopes } } : {}),
     },
   };
 }

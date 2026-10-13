@@ -27,7 +27,8 @@ function flatSummary(cfg: any): string {
     c.priority && `приоритет — «${c.priority}» (тег P1, P2…)`,
     ...Object.entries(cfg.flat?.hours ?? {}).map(([col, team]) => `часы «${col}» → ${team}`),
   ].filter(Boolean);
-  return parts.join('; ');
+  const kind = ({ bug: 'баги', operational_improvement: 'оперативные доработки' } as Record<string, string>)[cfg.flat?.kind ?? ''];
+  return (kind ? `тип — ${kind}; ` : '') + parts.join('; ');
 }
 
 export function Sync() {
@@ -68,6 +69,14 @@ export function Sync() {
   return (
     <>
       <PageHead title="Синхронизация" sub="Загрузка задач из Google Sheets: таблица задач отдела (например, TaskFlow) или шаблон из листов эпиков, фич, офферов и связей. Запуск вручную, изменения применяются только после предпросмотра.">
+        {sources.data && (sources.data.bug_presets ?? []).some((p: any) => !sources.data.sources.some((x: any) => x.spreadsheet_id === p.spreadsheet_id && x.config?.flat?.sheet === p.config.flat.sheet)) && (
+          <button className="btn" title="Две вкладки таблицы «Прием обращений по багам/доработкам»: «Баги» и «Доработки»" onClick={async () => {
+            for (const p of sources.data.bug_presets) {
+              if (sources.data.sources.some((x: any) => x.spreadsheet_id === p.spreadsheet_id && x.config?.flat?.sheet === p.config.flat.sheet)) continue;
+              await mutate('/import/sources', 'POST', { name: p.name, kind: 'google', spreadsheet: p.spreadsheet_id, config: p.config }, `Источник «${p.name}» добавлен`);
+            }
+          }}><I.plus />Подключить баги и доработки</button>
+        )}
         <button className="btn primary" onClick={() => setEditing({})}><I.plus />Добавить источник</button>
       </PageHead>
 

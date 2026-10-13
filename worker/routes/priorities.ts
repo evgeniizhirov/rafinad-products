@@ -54,7 +54,7 @@ export function registerPriorityRoutes(r: Router) {
   /** Matrix "features × departments" + overall ranking. */
   r.get('/api/priorities', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const p = ctx.url.searchParams;
     let rows = visibleFeatures(w, viewer).filter((f) => p.get('include_closed') === '1' || !['done', 'cancelled'].includes(idx.status.get(f.status_id)?.semantic));

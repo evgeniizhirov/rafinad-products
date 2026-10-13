@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { FeatureCard, FeatureForm, FeatureTitle } from '../features';
 import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useDict, useLocation } from '../lib';
+import { ExportDialog } from './ExportDialog';
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
-const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period'] as const;
+const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
+export const KIND_OPTIONS = [{ id: 'planned', name: 'Плановые задачи' }, { id: 'bug', name: 'Баги' }, { id: 'operational_improvement', name: 'Оперативные доработки' }, { id: 'bug,operational_improvement', name: 'Баги и доработки' }];
 const FLAG_LABEL: Record<string, string> = { open: 'Открытые задачи', blocked: 'С блокировками', unvoted: 'Без голосов отделов', unestimated: 'Без оценки часов' };
 const SEMANTIC_LABEL: Record<string, string> = { new: 'новые', analysis: 'на проработке', ready: 'готовы к планированию', planned: 'запланированы', in_progress: 'в работе', blocked: 'заблокированы', postponed: 'отложены', done: 'завершены', cancelled: 'отменены' };
 
@@ -16,6 +18,7 @@ export function Backlog() {
   const [q, setQ] = useState(params.get('q') ?? '');
   const dq = useDebounced(q, 250);
   const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const view = (params.get('view') as 'table' | 'board') ?? 'table';
   const setParam = (k: string, v: string | null) => {
     const p = new URLSearchParams(location.search);
@@ -28,7 +31,7 @@ export function Backlog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq]);
   const apiQs = new URLSearchParams();
-  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag']) {
+  for (const k of [...FILTERS, 'q', 'sort', 'hide_closed', 'visibility', 'flag', 'tag', 'sprint', 'focus', 'ids']) {
     const v = params.get(k);
     if (v) apiQs.set(k, v);
   }
@@ -38,7 +41,8 @@ export function Backlog() {
   const releases = useApi<any>('/releases');
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const showHours = meta.viewer !== 'guest' || meta.settings.public_show_estimates;
-  const activeFilters = FILTERS.filter((k) => params.get(k)).length + (params.get('q') ? 1 : 0) + (params.get('flag') ? 1 : 0) + (params.get('tag') ? 1 : 0);
+  const activeFilters = FILTERS.filter((k) => params.get(k)).length + ['q', 'flag', 'tag', 'sprint', 'focus', 'ids'].filter((k) => params.get(k)).length;
+  const sprints = useApi<any>(params.get('sprint') ? '/sprints' : null);
   // quick filters coming from the overview tiles / tags (not represented by the selects)
   const statusParam = params.get('status');
   const semanticStatus = statusParam && !d.statuses('feature').some((s) => s.id === statusParam) ? SEMANTIC_LABEL[statusParam] ?? statusParam : null;
@@ -46,6 +50,10 @@ export function Backlog() {
     ...(params.get('flag') ? [{ key: 'flag', label: FLAG_LABEL[params.get('flag')!] ?? params.get('flag')! }] : []),
     ...(semanticStatus ? [{ key: 'status', label: `Статус: ${semanticStatus}` }] : []),
     ...(params.get('tag') ? [{ key: 'tag', label: `Тег: ${params.get('tag')}` }] : []),
+    ...(params.get('sprint') ? [{ key: 'sprint', label: `Спринт ${params.get('sprint') === 'none' ? 'не указан' : (sprints.data?.sprints ?? []).find((s: any) => s.id === params.get('sprint'))?.code ?? ''}` }] : []),
+    ...(params.get('focus') === '1' ? [{ key: 'focus', label: 'Фокусные задачи' }] : []),
+    ...(params.get('ids') ? [{ key: 'ids', label: `Из аналитики: ${params.get('ids')!.split(',').filter(Boolean).length} задач` }] : []),
+    ...(params.get('initiator') && !params.get('initiator')!.startsWith('department:') && params.get('initiator') !== 'none' ? [{ key: 'initiator', label: `Инициатор: ${params.get('initiator')!.replace(/^(text|user):/, '')}` }] : []),
   ];
 
   const sel = (k: string, label: string, options: { id: string; name: string }[], extra?: { id: string; name: string }[]) => (
@@ -60,6 +68,7 @@ export function Backlog() {
     <>
       <PageHead title="Бэклог" sub="Все известные продуктовые доработки с приоритетами отделов, оценками и планом.">
         <Seg value={view} onChange={(v) => setParam('view', v === 'table' ? null : v)} items={[{ id: 'table', label: <I.table />, title: 'Таблица' }, { id: 'board', label: <I.board />, title: 'Канбан по статусам' }]} />
+        {meta.viewer !== 'guest' && <button className="btn" onClick={() => setExporting(true)} title="Excel или Google-таблица, по текущим фильтрам">Экспорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setCreating(true)}><I.plus />Новая задача</button>}
       </PageHead>
       <GuestNote />
@@ -75,6 +84,9 @@ export function Backlog() {
         {sel('offer', 'Все офферы', (offers.data?.offers ?? []).map((o: any) => ({ id: o.id, name: o.name })))}
         {sel('release', 'Все релизы', (releases.data?.releases ?? []).map((r: any) => ({ id: r.id, name: r.name })), [{ id: 'none', name: 'Вне релизов' }])}
         {sel('period', 'Все периоды', d.activePeriods.map((p) => ({ id: p.id, name: p.name })), [{ id: 'none', name: 'Не запланированы' }])}
+        {sel('kind', 'Все типы работ', KIND_OPTIONS)}
+        {canEdit && sel('internal', 'Общие задачи', [{ id: '1', name: 'Внутренние задачи продукта' }, { id: 'all', name: 'Общие и внутренние' }])}
+        {meta.viewer !== 'guest' && sel('initiator', 'Любой инициатор', d.activeDepts.map((x) => ({ id: `department:${x.id}`, name: `Отдел: ${x.name}` })), [{ id: 'none', name: 'Инициатор не указан' }])}
         <select className="select" aria-label="Сортировка" value={params.get('sort') ?? 'priority'} onChange={(e) => setParam('sort', e.target.value === 'priority' ? null : e.target.value)}>
           <option value="priority">По приоритету</option>
           <option value="number">По номеру</option>
@@ -147,6 +159,7 @@ export function Backlog() {
         </div>
       )}
       {data && view === 'board' && <Board features={data.features} canEdit={canEdit} />}
+      {exporting && <ExportDialog query={apiQs.toString()} onClose={() => setExporting(false)} />}
       {creating && <FeatureForm onClose={() => setCreating(false)} />}
     </>
   );
