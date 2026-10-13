@@ -7,7 +7,7 @@ import { perms, requirePerm, requireUser } from '../lib/auth';
 import { auditStmt, diffFields, type Change } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
-import { canSeeFeature, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, matchesInitiator, TASK_KINDS, viewerOf, visibleFeatures, type FeatureFlag, type World } from '../lib/world';
+import { canSeeFeature, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, matchesInitiator, TASK_KINDS, viewerOf, visibleFeatures, type FeatureFlag, type Viewer, type World } from '../lib/world';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД').nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -119,43 +119,55 @@ export function sortFeatures(rows: Row[], w: World, idx: ReturnType<typeof index
   return rows.slice().sort(cmp[sort] ?? cmp.priority);
 }
 
+/**
+ * The task list query shared by the backlog and the export (FR-08): the same filters, re-applied on the server,
+ * over a world that already respects the viewer (hidden Product tasks only for product/admin asking for them).
+ */
+export function queryFeatures(p: URLSearchParams, viewer: Viewer, w: World, idx: ReturnType<typeof indexWorld>): Row[] {
+  const q = (p.get('q') || '').trim().toLowerCase();
+  const scope = viewer === 'editor' ? ({ '1': 'internal', only: 'internal', all: 'all' } as const)[p.get('internal') ?? ''] ?? 'general' : 'general';
+  let rows = visibleFeatures(w, viewer, scope);
+  const filt = (key: string, fn: (f: Row, v: string) => boolean) => {
+    const vals = p.getAll(key).flatMap((v) => v.split(',')).filter(Boolean);
+    if (vals.length) rows = rows.filter((f) => vals.some((v) => fn(f, v)));
+  };
+  filt('status', (f, v) => f.status_id === v || idx.status.get(f.status_id)?.semantic === v);
+  filt('category', (f, v) => f.category_id === v);
+  filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
+  filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
+  filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
+  filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
+  filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
+  filt('stage', (f, v) => f.stage_id === v);
+  filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
+  filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
+  filt('assignee', (f, v) => (v === 'none' ? !f.assignee_name : (f.assignee_name ?? '').toLowerCase() === v.toLowerCase()));
+  if (p.get('focus') === '1') rows = rows.filter((f) => bool(f.is_focus));
+  if (viewer !== 'guest') filt('initiator', (f, v) => matchesInitiator(f, w, v));
+  if (viewer !== 'guest') filt('visibility', (f, v) => f.visibility === v);
+  const from = p.get('created_from');
+  const to = p.get('created_to');
+  if (from) rows = rows.filter((f) => (f.requested_at ?? f.created_at.slice(0, 10)) >= from);
+  if (to) rows = rows.filter((f) => (f.requested_at ?? f.created_at.slice(0, 10)) <= to);
+  if (q) {
+    rows = rows.filter((f) =>
+      `rf-${f.number} ${f.title} ${f.description} ${(idx.tagsBy.get(f.id) ?? []).join(' ')} ${viewer !== 'guest' ? f.external_ref ?? '' : ''}`.toLowerCase().includes(q),
+    );
+  }
+  if (p.get('hide_closed') === '1') rows = rows.filter((f) => !isClosed(f, idx));
+  const flag = p.get('flag') as FeatureFlag | null;
+  if (flag && flag in FLAG_LABELS) rows = rows.filter((f) => hasFlag(flag, f, w, idx));
+  const tag = (p.get('tag') || '').trim().toLowerCase();
+  if (tag) rows = rows.filter((f) => (idx.tagsBy.get(f.id) ?? []).some((t) => t.toLowerCase() === tag));
+  return sortFeatures(rows, w, idx, p.get('sort') || 'priority');
+}
+
 export function registerFeatureRoutes(r: Router) {
   r.get('/api/features', async (ctx) => {
     const viewer = viewerOf(ctx.user);
     const w = await loadWorld(ctx.env.DB, viewer, { includeInternal: true });
     const idx = indexWorld(w);
-    const p = ctx.url.searchParams;
-    const q = (p.get('q') || '').trim().toLowerCase();
-    const scope = viewer === 'editor' ? ({ '1': 'internal', only: 'internal', all: 'all' } as const)[p.get('internal') ?? ''] ?? 'general' : 'general';
-    let rows = visibleFeatures(w, viewer, scope);
-    const filt = (key: string, fn: (f: Row, v: string) => boolean) => {
-      const vals = p.getAll(key).flatMap((v) => v.split(',')).filter(Boolean);
-      if (vals.length) rows = rows.filter((f) => vals.some((v) => fn(f, v)));
-    };
-    filt('status', (f, v) => f.status_id === v || idx.status.get(f.status_id)?.semantic === v);
-    filt('category', (f, v) => f.category_id === v);
-    filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
-    filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
-    filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
-    filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
-    filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
-    filt('stage', (f, v) => f.stage_id === v);
-    filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
-    filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
-    if (p.get('focus') === '1') rows = rows.filter((f) => bool(f.is_focus));
-    if (viewer !== 'guest') filt('initiator', (f, v) => matchesInitiator(f, w, v));
-    if (viewer !== 'guest') filt('visibility', (f, v) => f.visibility === v);
-    if (q) {
-      rows = rows.filter((f) =>
-        `rf-${f.number} ${f.title} ${f.description} ${(idx.tagsBy.get(f.id) ?? []).join(' ')} ${viewer !== 'guest' ? f.external_ref ?? '' : ''}`.toLowerCase().includes(q),
-      );
-    }
-    if (p.get('hide_closed') === '1') rows = rows.filter((f) => !isClosed(f, idx));
-    const flag = p.get('flag') as FeatureFlag | null;
-    if (flag && flag in FLAG_LABELS) rows = rows.filter((f) => hasFlag(flag, f, w, idx));
-    const tag = (p.get('tag') || '').trim().toLowerCase();
-    if (tag) rows = rows.filter((f) => (idx.tagsBy.get(f.id) ?? []).some((t) => t.toLowerCase() === tag));
-    rows = sortFeatures(rows, w, idx, p.get('sort') || 'priority');
+    const rows = queryFeatures(ctx.url.searchParams, viewer, w, idx);
     return json({ features: rows.map((f) => featureDto(f, viewer, w, idx)), total: rows.length });
   });
 

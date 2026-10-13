@@ -204,3 +204,47 @@
 **UI:** раздел «API-ключи» в профиле (новый ключ с показом токена один раз), вкладка «API-ключи» в администрировании.
 
 **Документация:** `docs/API_KEYS.md` — подключение Claude Code и Codex, curl-примеры.
+
+## P08 — ручной экспорт XLSX / Google «Import» (FR-08) · ветка `claude/08-export`
+
+**Миграция `0008_exports.sql`:**
+- таблица `export_runs`: кто, `api_key_id`, цель, снимок фильтров, число строк, статус, ошибка;
+- частичный уникальный индекс: одновременно может идти только одна Google-выгрузка (`running`);
+- настройки `export_google_spreadsheet_id` (пусто = выключено) и `export_google_roles` (по умолчанию `product,admin`; это открытое решение №8 ТЗ, админ меняет его в «Публикации»).
+
+**Выборка:**
+- Фильтры бэклога вынесены в `queryFeatures(params, viewer, world, idx)` (`worker/routes/features.ts`). Список и экспорт используют одну функцию.
+- Сервер заново применяет фильтры и ACL; `internal=…` действует только для product/admin. Лимит — 5000 строк (иначе 413).
+- Добавлены фильтры `assignee`, `created_from`, `created_to`.
+
+**Колонки — `worker/domain/exportTable.ts`:**
+- одна схема для обоих каналов; колонки для сотрудников скрыты от гостя, «Внутренняя задача продукта» — только для product/admin;
+- **открытое решение №4:** состав колонок финально сверить с владельцем.
+
+**XLSX — `worker/domain/xlsx.ts`:**
+- собственный writer без зависимостей (ZIP STORE + CRC32), все строки — inline strings, поэтому формулы не вычисляются;
+- проверено чтением в openpyxl и конвертацией в LibreOffice;
+- закреплённая шапка и автофильтр.
+
+**Google — `writeImportTab` в `worker/lib/google.ts`:**
+- отдельный токен со scope `spreadsheets` (импорт по-прежнему `readonly`);
+- проверка вкладки `Import`, затем **один** `batchUpdate` только с `sheetId` вкладки Import (расширить сетку, очистить, записать как `stringValue`/`numberValue`) — атомарно, соседние вкладки не адресуются;
+- обязательные подтверждения: 409 `confirm_external` → «содержимое увидят читатели таблицы»; при наличии внутренних задач — ещё 409 `confirm_internal`;
+- по API-ключу Google-выгрузка недоступна (только человек в браузере); XLSX/preview по ключу — scope `exports:read`.
+
+**API:**
+- `GET /api/exports/config`;
+- `POST /api/exports/preview {query}` → `count`, `internal_count`, `columns`;
+- `POST /api/exports/xlsx {query}` → файл;
+- `POST /api/exports/google {query, confirm_external, confirm_internal}`;
+- `GET /api/exports/runs`.
+- Аудит: `entity_type = 'export'`.
+
+**UI:** кнопка «Экспорт» в бэклоге (текущие фильтры, все страницы); настройки таблицы экспорта и ролей — Администрирование → Публикация.
+
+**Перед включением Google-экспорта на проде:**
+1. Создать таблицу с вкладкой «Import».
+2. Дать сервисному аккаунту роль «Редактор».
+3. Указать ссылку в настройках.
+
+**Не проверено:** запись в реальную Google-таблицу (тесты — на моке Sheets API).

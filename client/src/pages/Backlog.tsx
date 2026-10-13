@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { FeatureCard, FeatureForm, FeatureTitle } from '../features';
 import { fmtH, mutate, navigate, openFeature, useApi, useApp, useDebounced, useDict, useLocation } from '../lib';
+import { ExportDialog } from './ExportDialog';
 import { Cubes, Empty, ErrorBox, GuestNote, Loading, PageHead, Seg, StatusPill, VisBadge } from '../ui';
 
 const FILTERS = ['status', 'category', 'epic', 'department', 'offer', 'release', 'period', 'kind', 'internal', 'initiator'] as const;
@@ -17,6 +18,7 @@ export function Backlog() {
   const [q, setQ] = useState(params.get('q') ?? '');
   const dq = useDebounced(q, 250);
   const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const view = (params.get('view') as 'table' | 'board') ?? 'table';
   const setParam = (k: string, v: string | null) => {
     const p = new URLSearchParams(location.search);
@@ -65,6 +67,7 @@ export function Backlog() {
     <>
       <PageHead title="Бэклог" sub="Все известные продуктовые доработки с приоритетами отделов, оценками и планом.">
         <Seg value={view} onChange={(v) => setParam('view', v === 'table' ? null : v)} items={[{ id: 'table', label: <I.table />, title: 'Таблица' }, { id: 'board', label: <I.board />, title: 'Канбан по статусам' }]} />
+        {meta.viewer !== 'guest' && <button className="btn" onClick={() => setExporting(true)} title="Excel или Google-таблица, по текущим фильтрам">Экспорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setCreating(true)}><I.plus />Новая задача</button>}
       </PageHead>
       <GuestNote />
@@ -155,6 +158,7 @@ export function Backlog() {
         </div>
       )}
       {data && view === 'board' && <Board features={data.features} canEdit={canEdit} />}
+      {exporting && <ExportDialog query={apiQs.toString()} onClose={() => setExporting(false)} />}
       {creating && <FeatureForm onClose={() => setCreating(false)} />}
     </>
   );

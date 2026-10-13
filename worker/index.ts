@@ -7,6 +7,7 @@ import { registerAuthRoutes } from './routes/auth';
 import { registerCalendarRoutes } from './routes/calendar';
 import { registerCatalogRoutes } from './routes/catalog';
 import { registerDashboardRoutes } from './routes/dashboard';
+import { registerExportRoutes } from './routes/exports';
 import { registerFeatureRoutes } from './routes/features';
 import { registerImportRoutes } from './routes/imports';
 import { registerMergeRoutes } from './routes/merge';
@@ -27,6 +28,7 @@ registerPlanningRoutes(router);
 registerImportRoutes(router);
 registerAdminRoutes(router);
 registerApiKeyRoutes(router);
+registerExportRoutes(router);
 
 const SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
