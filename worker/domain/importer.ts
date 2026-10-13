@@ -8,6 +8,7 @@
 // unless the user explicitly ticks them.
 
 import { flatToCanonical, type FlatConfig } from './flatSheet';
+import { decodeLinks, emptyPlan, planHasChanges, planLinks, type ExistingLink, type LinkChoice } from './linkImport';
 import { findCycle, type Edge } from './graph';
 import { normalizeTitle, parseDate, parseHours, sanitizeCell, similarity } from './text';
 
@@ -37,13 +38,17 @@ export const SHEET_COLUMNS: Record<SheetKey, { required: string[]; optional: str
     required: ['external_id', 'title'],
     optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'assignee', 'planned_end', 'closed_at', 'tags', 'visibility',
       // bugs / operational improvements (P05); task_kind, initiator and author are applied on creation only
-      'task_kind', 'urgency', 'fact_hours', 'initiator', 'author'],
+      'task_kind', 'urgency', 'fact_hours', 'initiator', 'author',
+      // external links (vNext §3): one per line, «https://…» or «jira https://…»
+      'links'],
   },
   relations: { required: ['from_type', 'from_external_id', 'relation_type', 'to_type', 'to_external_id'], optional: [] },
 };
 
 /** raw sheets as read from the source; `flat` holds the single sheet of the 'flat' format */
 export type SheetsData = Partial<Record<SheetKey | 'flat', string[][]>>;
+/** URLs hidden behind cell text (Google Sheets metadata), same grid as the sheet, newline-separated per cell */
+export type SheetHyperlinks = Partial<Record<SheetKey | 'flat', string[][]>>;
 
 /** names of the sheets to read for a config */
 export function sourceSheetNames(config: ImportConfig): { key: SheetKey | 'flat'; name: string }[] {
@@ -83,6 +88,9 @@ export interface Snapshot {
   relations: { type: string; from_id: string; to_id: string }[];
   /** for the initiator column: an exact name match becomes a link to a department / user */
   departments?: { id: string; name: string }[];
+  /** external links of every card and the id of the source being imported (link ownership) */
+  featureLinks?: ExistingLink[];
+  sourceId?: string;
   users?: { id: string; name: string }[];
 }
 
@@ -114,6 +122,8 @@ export interface Resolution {
   fields?: Record<string, 'source' | 'local'>;
   /** protected field → explicitly confirmed overwrite */
   protected?: Record<string, boolean>;
+  /** external links: conflicts where the source wins, links «нет в источнике» to delete */
+  links?: LinkChoice;
 }
 
 export interface ItemDraft {
@@ -253,7 +263,7 @@ export function resolveMerged(map: Map<string, SnapshotEntity>, id: string): Sna
   return e;
 }
 
-export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string } = {}): ItemDraft[] {
+export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string; hyperlinks?: SheetHyperlinks } = {}): ItemDraft[] {
   const L = buildLookup(snap);
   const items: ItemDraft[] = [];
   let seq = 0;
@@ -268,7 +278,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
     sheets = {};
     const raw = rawSheets.flat;
     if (raw && raw.length) {
-      const conv = flatToCanonical(raw, config.flat, snap.teams.map((t) => t.code.toLowerCase()), today);
+      const conv = flatToCanonical(raw, config.flat, snap.teams.map((t) => t.code.toLowerCase()), today, opts.hyperlinks?.flat);
       if (conv.missing.includes(config.flat.columns.title)) {
         items.push({
           seq: seq++, sheet: config.flat.sheet, rowNumber: 1, entityType: 'sheet', externalId: null, action: 'error', targetId: null, targetVersion: null,
@@ -437,6 +447,13 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
           else if (h.value !== null) estimates[teamId] = h.value;
         }
         payload.estimates = estimates;
+        if (has('links')) {
+          // absent column = links untouched; a present (even empty) column = this source's links of the task
+          const dl = decodeLinks(cell(row, 'links', 50000));
+          payload.links = dl.links;
+          // flat sheets report bad cells while converting (with the real column name); a template reports them here
+          if (!flatDerived) warnings.push(...dl.problems);
+        }
       }
 
       const base = {
@@ -480,7 +497,8 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (target) {
         if (matchNote) warnings.push(matchNote);
         const diff = diffEntity(entityType, target, payload, lastValues, L, teamName, { statusFollowsSource: config.format === 'flat' });
-        const action: Action = diff.length ? 'update' : 'unchanged';
+        if (entityType === 'feature' && payload.links) payload.link_plan = linkPlanFor(snap, target.id, payload.links);
+        const action: Action = diff.length || planHasChanges(payload.link_plan) ? 'update' : 'unchanged';
         const fields: Record<string, 'source' | 'local'> = {};
         for (const d of diff) if (d.kind === 'update') fields[d.field] = 'source';
         const it = push({
@@ -511,6 +529,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (visibilityRaw === 'public' || visibilityRaw === 'публичная') {
         warnings.push('Новая карточка попадёт в черновики; опубликуйте её после проверки');
       }
+      if (entityType === 'feature' && payload.links?.length) payload.link_plan = { ...emptyPlan(), add: payload.links };
       const it = push({ ...base, action: 'create', resolution: { mode: 'create' } });
       inRun[entityType].set(lc(externalId), it);
     }
@@ -531,6 +550,11 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
     }
   }
   return items;
+}
+
+/** what an import of these source links would do to a card (also recomputed at apply time on fresh data) */
+export function linkPlanFor(snap: Snapshot, featureId: string, links: { kind: any; url: string; column: string }[]) {
+  return planLinks(links, (snap.featureLinks ?? []).filter((l) => l.feature_id === featureId), snap.sourceId ?? '');
 }
 
 function entityLabel(type: string, e: SnapshotEntity) {

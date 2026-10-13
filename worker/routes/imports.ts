@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { parseCsv, toCsv } from '../domain/csv';
 import { findCycle, type Edge } from '../domain/graph';
 import {
-  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceSheetNames, sourceValues, unresolvedReasons,
-  type ImportConfig, type ItemDraft, type Resolution, type SheetKey, type SheetsData, type Snapshot,
+  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, linkPlanFor, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceSheetNames, sourceValues, unresolvedReasons,
+  type ImportConfig, type ItemDraft, type Resolution, type SheetHyperlinks, type SheetKey, type SheetsData, type Snapshot,
 } from '../domain/importer';
 import { DEMO_SHEETS } from '../demoData';
+import { emptyPlan, linkSummary, type LinkPlan, type SourceLink } from '../domain/linkImport';
 import { BUGS_CONFIG, BUGS_SPREADSHEET_ID, IMPROVEMENTS_CONFIG, TASKFLOW_CONFIG } from '../domain/flatSheet';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
@@ -33,6 +34,8 @@ const flatSchema = z.object({
   fact_hours_as: z.enum(['description', 'field']).optional(),
   flags: z.record(colName, z.string().trim().min(1).max(40)).default({}),
   hours: z.record(colName, z.string().trim().min(1).max(40)).default({}),
+  links: z.record(colName, z.enum(['bitrix24', 'jira', 'docs', 'other'])).optional(),
+  links_from_text: z.boolean().optional(),
 });
 const configSchema = z.object({
   format: z.enum(['template', 'flat']).default('template'),
@@ -66,12 +69,16 @@ async function getSource(ctx: Ctx, id: string) {
  * Reads the source. Never writes anything: a failing Google API leaves the backlog untouched.
  * `files` — a CSV export uploaded by the user instead of reading Google directly (key: sheet key or 'flat').
  */
-async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null }> {
+async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null; hyperlinks: SheetHyperlinks }> {
   const config = configOf(s);
   const wanted = sourceSheetNames(config);
   const data: SheetsData = {};
   const notes: string[] = [];
+  const hyperlinks: SheetHyperlinks = {};
   let title: string | null = null;
+  // columns whose hidden hyperlinks are read from Google (flat sources with link columns / links in text)
+  const flat = config.format === 'flat' ? config.flat : undefined;
+  const linkHeaders = flat ? [...Object.keys(flat.links ?? {}), ...(flat.links_from_text ? [flat.columns.title, flat.columns.description ?? ''] : [])].filter(Boolean) : [];
   if (files) {
     for (const w of wanted) {
       if (files[w.key]) data[w.key] = parseCsv(files[w.key]);
@@ -80,8 +87,10 @@ async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Pro
     title = 'Загруженная выгрузка';
   } else if (s.kind === 'google') {
     if (!s.spreadsheet_id) throw badRequest('Не указана таблица Google Sheets');
-    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, wanted.map((w) => w.name));
+    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, wanted.map((w) => w.name), { linkColumns: flat && linkHeaders.length ? { [flat.sheet]: linkHeaders } : {} });
     title = res.title;
+    if (flat && res.hyperlinks?.[flat.sheet]) hyperlinks.flat = res.hyperlinks[flat.sheet];
+    if (flat && linkHeaders.length && res.mode === 'public_link') notes.push('Гиперссылки, скрытые за текстом ячеек, читаются только через сервисный аккаунт — импортированы адреса, видимые в тексте');
     for (const w of wanted) {
       if (res.data[w.name]) data[w.key] = res.data[w.name];
       else notes.push(`Лист «${w.name}» не найден${res.available.length ? ` (есть: ${res.available.slice(0, 20).join(', ')})` : ''} — пропущен`);
@@ -95,7 +104,9 @@ async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Pro
   }
   if (!Object.keys(data).length) throw badRequest('В источнике нет ни одного листа для импорта');
   const canonical = wanted.map((w) => [w.key, data[w.key] ?? null]);
-  return { data, hash: await sha256Hex(JSON.stringify(canonical)), notes, title };
+  // hidden hyperlinks are part of the source: a changed link makes an older preview stale
+  if (hyperlinks.flat) canonical.push(['flat:hyperlinks', hyperlinks.flat as any]);
+  return { data, hash: await sha256Hex(JSON.stringify(canonical)), notes, title, hyperlinks };
 }
 
 async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot> {
@@ -113,6 +124,7 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT feature_id, tag FROM feature_tags ORDER BY tag'),
     q('SELECT id, name FROM departments'),
     q('SELECT id, name FROM users WHERE is_active = 1'),
+    q('SELECT id, feature_id, kind, url, origin, source_id, locally_edited FROM feature_links'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
@@ -136,6 +148,8 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     relations: r(7) as Snapshot['relations'],
     departments: r(10) as Snapshot['departments'],
     users: r(11) as Snapshot['users'],
+    featureLinks: r(12) as Snapshot['featureLinks'],
+    sourceId,
   };
 }
 
@@ -165,6 +179,7 @@ async function runDto(ctx: Ctx, runId: string) {
     id: run.id, source_id: run.source_id, status: run.status, created_at: run.created_at, created_by: run.created_by_name, applied_at: run.applied_at,
     applied_by: run.applied_by_name, counts: parseJson(run.counts, null), error: run.error, source_hash: run.source_hash, origin: run.origin ?? 'source',
     summary: countItems(drafts),
+    links: linkSummary(drafts),
     unresolved: run.status === 'preview' ? unresolvedReasons(drafts) : [],
     items: items.map(itemDto),
   };
@@ -175,6 +190,7 @@ const resolutionSchema = z.object({
   targetId: z.string().optional(),
   fields: z.record(z.string(), z.enum(['source', 'local'])).optional(),
   protected: z.record(z.string(), z.boolean()).optional(),
+  links: z.object({ source: z.array(z.string().max(2000)).max(200).optional(), remove: z.array(z.string().max(2000)).max(200).optional() }).optional(),
 });
 
 function validateResolution(item: Row, res: Resolution) {
@@ -192,6 +208,9 @@ function validateResolution(item: Row, res: Resolution) {
   const diff = parseJson<{ field: string; kind: string }[]>(item.diff, []);
   for (const f of Object.keys(res.fields ?? {})) if (!diff.some((d) => d.field === f && d.kind !== 'protected')) throw badRequest(`Поле ${f} не участвует в изменениях`);
   for (const f of Object.keys(res.protected ?? {})) if (!diff.some((d) => d.field === f && d.kind === 'protected')) throw badRequest(`Поле ${f} не является защищённым`);
+  const plan = parseJson<Record<string, any>>(item.payload, {}).link_plan as LinkPlan | undefined;
+  for (const u of res.links?.source ?? []) if (!plan?.conflicts.some((c) => c.url === u)) throw badRequest(`Ссылка ${u} не в конфликте`);
+  for (const u of res.links?.remove ?? []) if (!plan?.missing.some((m) => m.url === u)) throw badRequest(`Ссылка ${u} не отмечена «нет в источнике»`);
 }
 
 const TABLE: Record<string, string> = { epic: 'epics', feature: 'features' };
@@ -256,6 +275,50 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   const reason = `Импорт: ${source.name}`;
   const newVisibility = configOf(source).newVisibility === 'internal' ? 'internal' : 'draft';
   const today = now.slice(0, 10);
+  const linkCounts = { added: 0, updated: 0, removed: 0, kept_missing: 0, conflicts_local: 0, conflicts_source: 0 };
+  /**
+   * External links of one task row: the plan is recomputed here on fresh data (the preview only shows it).
+   * Manual links are never touched; INSERT OR IGNORE protects a URL added by hand between preview and apply.
+   */
+  const importLinks = (d: ItemDraft, featureId: string, isNew: boolean) => {
+    const links = d.payload.links as SourceLink[] | undefined;
+    if (!links) return;
+    const plan: LinkPlan = isNew ? { ...emptyPlan(), add: links } : linkPlanFor(snap, featureId, links);
+    const choice = d.resolution?.links ?? {};
+    const changes: Change[] = [];
+    const label = (kind: string, url: string) => `${kind}: ${url}`;
+    for (const a of plan.add) {
+      st.push(stmt(db, `INSERT OR IGNORE INTO feature_links (id, feature_id, kind, url, origin, source_id, source_column, created_at, created_by, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, 'import', ?, ?, ?, ?, ?, ?)`, newId('lnk'), featureId, a.kind, a.url, source.id, a.column, now, user.id, now, user.id));
+      changes.push({ field: 'link', old: null, new: label(a.kind, a.url) });
+      linkCounts.added++;
+    }
+    for (const u of plan.update) {
+      st.push(stmt(db, `UPDATE feature_links SET kind = ?, source_column = ?, updated_at = ?, updated_by = ?, version = version + 1
+        WHERE id = ? AND origin = 'import' AND locally_edited = 0`, u.to, u.column, now, user.id, u.id));
+      changes.push({ field: 'link', old: label(u.from, u.url), new: label(u.to, u.url) });
+      linkCounts.updated++;
+    }
+    for (const c of plan.conflicts) {
+      if (!(choice.source ?? []).includes(c.url)) {
+        linkCounts.conflicts_local++;
+        counts.conflicts.push({ row: `${d.sheet}:${d.rowNumber}`, field: `ссылка ${c.url}`, choice: 'local' });
+        continue;
+      }
+      st.push(stmt(db, `UPDATE feature_links SET kind = ?, source_column = ?, locally_edited = 0, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?`,
+        c.source, c.column, now, user.id, c.id));
+      changes.push({ field: 'link', old: label(c.local, c.url), new: label(c.source, c.url) });
+      counts.conflicts.push({ row: `${d.sheet}:${d.rowNumber}`, field: `ссылка ${c.url}`, choice: 'source' });
+      linkCounts.conflicts_source++;
+    }
+    for (const m of plan.missing) {
+      if (!(choice.remove ?? []).includes(m.url)) { linkCounts.kept_missing++; continue; }
+      st.push(stmt(db, `DELETE FROM feature_links WHERE id = ? AND origin = 'import' AND source_id = ? AND locally_edited = 0`, m.id, source.id));
+      changes.push({ field: 'link', old: label(m.kind, m.url), new: null });
+      linkCounts.removed++;
+    }
+    if (changes.length) st.push(auditStmt(db, user, 'feature', featureId, 'import_links', changes, reason));
+  };
 
   // 2. entity statements in dependency order: epics → features
   for (const type of ['epic', 'feature'] as const) {
@@ -289,6 +352,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         }
         st.push(linkStmt(type, ext, p.id, pl));
         st.push(auditStmt(db, user, type, p.id, 'import_created', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber}` }], reason));
+        if (type === 'feature') importLinks(d, p.id, true);
         continue;
       }
       if (p.mode === 'link') {
@@ -296,11 +360,13 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         // attach the source to an existing card without overwriting anything
         st.push(linkStmt(type, ext, p.id, pl));
         st.push(auditStmt(db, user, type, p.id, 'import_linked', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber} (${ext})` }], reason));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       if (p.mode === 'unchanged') {
         counts.unchanged++;
         st.push(linkStmt(type, ext, p.id, pl));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       // update: only the fields that the preview showed and the user accepted
@@ -330,6 +396,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       if (!changes.length) {
         counts.unchanged++;
         st.push(linkStmt(type, ext, p.id, pl));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       counts.updated++;
@@ -349,6 +416,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       }
       st.push(linkStmt(type, ext, p.id, pl));
       st.push(auditStmt(db, user, type, p.id, 'import_updated', changes, reason));
+      if (type === 'feature') importLinks(d, p.id, false);
     }
   }
 
@@ -383,7 +451,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   st.push(stmt(db, `UPDATE import_runs SET status = 'applied', applied_at = ?, applied_by = ?, counts = ? WHERE id = ?`, now, user.id, JSON.stringify(counts), run.id));
   st.push(stmt(db, 'UPDATE sheet_sources SET updated_at = ? WHERE id = ?', now, source.id));
   st.push(auditStmt(db, user, 'import', run.id, 'applied', [{ field: 'counts', old: null, new: { ...counts, conflicts: counts.conflicts.length } }], reason));
-  return { statements: st, counts, itemIds };
+  return { statements: st, counts: { ...counts, links: linkCounts }, itemIds };
 }
 
 export function registerImportRoutes(r: Router) {
@@ -532,10 +600,10 @@ export function registerImportRoutes(r: Router) {
       const b = await readJson(ctx, z.object({ files: z.record(z.string().max(40), z.string().max(1_500_000)).optional() }));
       if (b.files && Object.keys(b.files).length) files = b.files;
     }
-    const { data, hash, notes } = await readSource(ctx, s, files);
+    const { data, hash, notes, hyperlinks } = await readSource(ctx, s, files);
     const config = configOf(s);
     const snap = await loadSnapshot(ctx.env.DB, s.id);
-    const items = buildPreview(data, config, snap);
+    const items = buildPreview(data, config, snap, { hyperlinks });
     if (items.length > 3000) throw badRequest('Слишком много строк для одного импорта (максимум 3000)');
     const db = ctx.env.DB;
     const runId = newId('run');

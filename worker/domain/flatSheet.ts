@@ -8,6 +8,8 @@
 //     a "possible duplicate" (same/similar title) and the user links it explicitly.
 // If the sheet gets a real ID column later, map it in `columns.id` and it is used instead.
 
+import { encodeLinks, readLinkCell, type SourceLink } from './linkImport';
+import type { LinkKind } from './links';
 import { normalizeTitle, parseHours, sanitizeCell } from './text';
 
 export type FlatKind = 'planned' | 'bug' | 'operational_improvement';
@@ -55,6 +57,10 @@ export interface FlatConfig {
   flags: Record<string, string>;
   /** hours column → resource team code */
   hours: Record<string, string>;
+  /** link column → kind of external link (vNext §3); a cell may hold several URLs */
+  links?: Record<string, LinkKind>;
+  /** also import URLs found in the task text and comment cells (kind guessed from the address) */
+  links_from_text?: boolean;
 }
 
 export const TASKFLOW_CONFIG: FlatConfig = {
@@ -72,6 +78,8 @@ export const TASKFLOW_CONFIG: FlatConfig = {
   },
   flags: { 'Влетевшая': 'влетевшая' },
   hours: { 'Оценка в часах': 'product' },
+  // URLs in the task cell (Bitrix24 / Jira links) become external links; the task text keeps them as before
+  links_from_text: true,
 };
 
 export const DEFAULT_STATUS_MAP: Record<string, string> = {
@@ -109,11 +117,13 @@ export const BUGS_CONFIG: FlatConfig = {
     initiator: 'Запрос от',
     author: 'Постановщик',
     fact_hours: 'фактическое кол-во часов',
-    extra: ['Постановщик задачи', 'Комментарий', 'Комментарий 2', 'Проект', 'задача в jira'],
+    extra: ['Постановщик задачи', 'Комментарий', 'Комментарий 2', 'Проект'],
   },
   fact_hours_as: 'field',
   flags: { hotfix: 'hotfix' },
   hours: {},
+  links: { 'задача в jira': 'jira' },
+  links_from_text: true,
 };
 
 /** same spreadsheet, tab «Доработки» (gid 1405337906) */
@@ -133,11 +143,13 @@ export const IMPROVEMENTS_CONFIG: FlatConfig = {
     initiator: 'Запрос от',
     author: 'Постановщик задачи',
     fact_hours: 'факт. кол-во часов',
-    extra: ['Комментарий', 'Проект', 'Отклонение от сроков', 'задача в jira'],
+    extra: ['Комментарий', 'Проект', 'Отклонение от сроков'],
   },
   fact_hours_as: 'field',
   flags: { hotfix: 'hotfix' },
   hours: {},
+  links: { 'задача в jira': 'jira' },
+  links_from_text: true,
 };
 
 export const BUGS_SPREADSHEET_ID = '1woBVsLqhRY67EYh8BJYGSqGSEeYPyWfmpUDN9bZ4T-E';
@@ -145,7 +157,7 @@ export const BUGS_SPREADSHEET_ID = '1woBVsLqhRY67EYh8BJYGSqGSEeYPyWfmpUDN9bZ4T-E
 /** canonical columns always produced for the importer (TaskFlow output is exactly these + hours) */
 export const FLAT_CANONICAL = ['external_id', 'title', 'description', 'category', 'status', 'assignee', 'planned_end', 'closed_at', 'tags'] as const;
 /** produced only when the sheet config maps them, so an existing source never gets new diffs */
-const FLAT_OPTIONAL = ['requested_at', 'task_kind', 'urgency', 'fact_hours', 'initiator', 'author'] as const;
+const FLAT_OPTIONAL = ['requested_at', 'task_kind', 'urgency', 'fact_hours', 'initiator', 'author', 'links'] as const;
 
 const YES = new Set(['да', 'yes', 'y', 'true', '1', '+', 'x', 'v', '✓', '✔', 'готово', 'сделано']);
 export const isYes = (v: string) => YES.has(v.trim().toLowerCase());
@@ -230,7 +242,11 @@ export interface FlatResult {
 /** header / config names: case-insensitive, whitespace (incl. line breaks) collapsed */
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
-export function flatToCanonical(sheetRows: string[][], cfg: FlatConfig, teamCodes: string[], today: string): FlatResult {
+/**
+ * `hyperlinks` — the same grid as `sheetRows`, each cell holding the URLs hidden behind its text (Google Sheets
+ * metadata, newline-separated). Absent for CSV: only the visible text can be read there.
+ */
+export function flatToCanonical(sheetRows: string[][], cfg: FlatConfig, teamCodes: string[], today: string, hyperlinks?: string[][]): FlatResult {
   const header = (sheetRows[0] ?? []).map((h) => norm(sanitizeCell(h, 300)));
   /** every column with this header (sheets often repeat a header, e.g. two «Комментарий») */
   const cols = (name?: string) => (name ? header.flatMap((h, i) => (h === norm(name) ? [i] : [])) : []);
@@ -244,6 +260,7 @@ export function flatToCanonical(sheetRows: string[][], cfg: FlatConfig, teamCode
     ...(c.extra ?? []).map((d) => ['extra', d] as [string, string]),
     ...Object.keys(cfg.flags ?? {}).map((f) => ['flag', f] as [string, string]),
     ...Object.keys(cfg.hours ?? {}).map((h) => ['hours', h] as [string, string]),
+    ...Object.keys(cfg.links ?? {}).map((l) => ['link', l] as [string, string]),
   ];
   const missing = [...new Set(mapped.filter(([, name]) => name && col(name) < 0).map(([, name]) => name!))];
 
@@ -252,8 +269,11 @@ export function flatToCanonical(sheetRows: string[][], cfg: FlatConfig, teamCode
     .filter((h) => h.i >= 0 && teamCodes.includes(h.code));
   const teamOrder = [...new Set(hoursCols.map((h) => h.code))];
   const factField = cfg.fact_hours_as === 'field';
+  const linkCols = Object.entries(cfg.links ?? {}).map(([name, kind]) => ({ name, kind, idx: cols(name) })).filter((l) => l.idx.length);
+  const hasLinks = linkCols.length > 0 || !!cfg.links_from_text;
   const optional = FLAT_OPTIONAL.filter((k) =>
-    k === 'task_kind' ? !!cfg.kind && cfg.kind !== 'planned'
+    k === 'links' ? hasLinks
+    : k === 'task_kind' ? !!cfg.kind && cfg.kind !== 'planned'
       : k === 'fact_hours' ? factField && col(c.fact_hours) >= 0
         : col(c[k]) >= 0);
   const out: string[][] = [[...FLAT_CANONICAL, ...optional, ...teamOrder.map((t) => `${t}_hours`)]];
@@ -343,6 +363,25 @@ export function flatToCanonical(sheetRows: string[][], cfg: FlatConfig, teamCode
     if (optional.includes('fact_hours')) opt.fact_hours = factHours.value === null ? '' : String(factHours.value);
     if (optional.includes('initiator')) opt.initiator = get(row, c.initiator, 200);
     if (optional.includes('author')) opt.author = get(row, c.author, 200);
+    if (optional.includes('links')) {
+      // mapped link columns first (their kind wins), then URLs found in the task text / comment
+      const found: SourceLink[] = [];
+      const hyper = (i: number) => (hyperlinks?.[r]?.[i] ?? '').split('\n').map((u) => u.trim()).filter(Boolean);
+      for (const lc of linkCols) {
+        for (const i of lc.idx) {
+          const res = readLinkCell(sanitizeCell(row[i], 5000), hyper(i), lc.name, lc.kind, true);
+          found.push(...res.links);
+          issues.push(...res.problems);
+        }
+      }
+      if (cfg.links_from_text) {
+        for (const name of [c.title, c.description]) {
+          for (const i of cols(name)) found.push(...readLinkCell(sanitizeCell(row[i], 20000), hyper(i), name!, undefined, false).links);
+        }
+      }
+      const seen = new Set<string>();
+      opt.links = encodeLinks(found.filter((l) => !seen.has(l.url) && !!seen.add(l.url)));
+    }
 
     const hourCells = teamOrder.map((t) => {
       const h = hoursCols.find((x) => x.code === t)!;
