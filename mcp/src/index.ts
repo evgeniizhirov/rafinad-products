@@ -71,7 +71,10 @@ export async function handle(request: Request, env: Env, deps: { keys?: JWTVerif
     const fetcher = deps.fetcher ?? ((input: RequestInfo | URL, init?: RequestInit) =>
       env.ROADMAP_API.fetch(new Request(input instanceof URL ? input.toString() : input, init)));
     const api = new Roadmap(env.RAFINAD_API_KEY, fetcher, env.AUTH_DIAGNOSTICS === 'true');
-    const handler = createMcpHandler(() => createServer(api, auth.canWrite));
+    const handler = createMcpHandler(() => createServer(api, {
+      writesEnabled: env.ENABLE_WRITES === 'true',
+      tokenHasWriteScope: auth.scopes.includes('roadmap:write'),
+    }));
     const response = await handler.fetch(request);
     const headers = new Headers(response.headers);
     headers.set('cache-control', 'no-store');

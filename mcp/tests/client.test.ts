@@ -18,7 +18,10 @@ test('official MCP client connects over Streamable HTTP in legacy and modern pro
       await client.connect(transport);
       assert.equal((await client.listTools()).tools.length, 14);
       const result = await client.callTool({ name: 'get_my_profile', arguments: {} });
-      assert.deepEqual(result.structuredContent, { data: { user: { id: 'fixture-user' } } });
+      assert.deepEqual(result.structuredContent, { data: {
+        user: { id: 'fixture-user' },
+        mcp_access: { writes_enabled: true, token_has_write_scope: true, can_write: true },
+      } });
     } finally { await client.close(); }
   }
 });
