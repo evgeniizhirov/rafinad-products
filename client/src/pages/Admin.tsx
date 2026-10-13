@@ -1,9 +1,10 @@
+import { AdminApiKeys } from './ApiKeys';
 import { useState } from 'react';
 import { I } from '../icons';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, ROLE_LABEL, toast, useApi, useApp, useQueryParam } from '../lib';
 import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs, useDirty } from '../ui';
 
-type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit';
+type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit' | 'apikeys';
 
 export function Admin() {
   const { me } = useApp();
@@ -26,12 +27,14 @@ export function Admin() {
           { id: 'statuses', label: 'Статусы' },
           { id: 'stages', label: 'Этапы' },
           { id: 'settings', label: 'Публикация' },
+          { id: 'apikeys', label: 'API-ключи' },
           { id: 'audit', label: 'Журнал' },
         ]}
       />
       {tab === 'users' && <Users />}
       {tab === 'settings' && <Settings />}
       {tab === 'audit' && <Audit />}
+      {tab === 'apikeys' && <AdminApiKeys />}
       {!['users', 'settings', 'audit'].includes(tab) && <Dictionary kind={tab as DictKind} />}
     </>
   );
