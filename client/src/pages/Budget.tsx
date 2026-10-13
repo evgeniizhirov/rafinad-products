@@ -19,7 +19,7 @@ export function Budget() {
   };
   return (
     <>
-      <PageHead title="Бюджет и доступность" sub="Календарные месяцы: лимит в рублях и гарантированные часы команд. Прогноз считается по плановым задачам в спринтах; баги и оперативные доработки в плановый бюджет не входят.">
+      <PageHead title="Бюджет и доступность" sub="Лимит в рублях задаётся на календарный месяц, доступность команд в часах — на спринт. Прогноз считается по плановым задачам в спринтах; баги и оперативные доработки в плановый бюджет не входят.">
         <button className="btn" onClick={() => shift(-1)}>←</button>
         <button className="btn" onClick={() => shift(1)}>→</button>
       </PageHead>
@@ -34,6 +34,7 @@ export function Budget() {
           <div className="grid-2">
             {data.months.map((m: any) => <MonthCard key={m.month} m={m} teams={data.teams} onClose={() => setClosing(m)} />)}
           </div>
+          <SprintCapacity sprints={data.sprints ?? []} teams={data.teams} />
         </div>
       )}
       {closing && (
@@ -84,28 +85,12 @@ function MonthCard({ m, teams, onClose }: { m: any; teams: any[]; onClose: () =>
               </div>
             )}
             <table className="data">
-              <thead><tr><th>Команда</th><th className="r">План, ч</th><th className="r">Доступно, ч</th></tr></thead>
+              <thead><tr><th>Команда</th><th className="r">План в месяце, ч</th></tr></thead>
               <tbody>
-                {teams.map((t: any) => {
-                  const h = m.hours?.[t.id] ?? 0;
-                  const cap = m.capacity?.[t.id];
-                  const over = (m.over_capacity ?? []).includes(t.id);
-                  return (
-                    <tr key={t.id}>
-                      <td>{t.name}</td>
-                      <td className="r num" style={over ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtH(h)}</td>
-                      <td className="r">
-                        {closed ? fmtH(cap ?? 0) : (
-                          <input className="input sm" style={{ width: 80, textAlign: 'right' }} defaultValue={cap ?? ''} placeholder="—" onBlur={(e) => {
-                            const v = e.target.value.trim();
-                            if (v === String(cap ?? '')) return;
-                            mutate('/planning/monthly-capacity', 'PUT', { month: m.month, team_id: t.id, hours: v === '' ? null : Number(v.replace(',', '.')) }, 'Доступность сохранена');
-                          }} />
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {teams.filter((t: any) => m.hours?.[t.id]).map((t: any) => (
+                  <tr key={t.id}><td>{t.name}</td><td className="r num">{fmtH(m.hours[t.id])}</td></tr>
+                ))}
+                {!teams.some((t: any) => m.hours?.[t.id]) && <tr><td colSpan={2} className="muted small">В месяце нет плановых задач со спринтом</td></tr>}
               </tbody>
             </table>
             {m.tasks?.length > 0 && (
@@ -120,3 +105,45 @@ function MonthCard({ m, teams, onClose }: { m: any; teams: any[]; onClose: () =>
     </section>
   );
 }
+
+/** team availability: one number per team per sprint; load = full estimates of the planned tasks in the sprint */
+function SprintCapacity({ sprints, teams }: { sprints: any[]; teams: any[] }) {
+  if (!sprints.length) return null;
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2 className="grow">Доступность команд по спринтам</h2></div>
+      <div className="panel-body">
+        <p className="small muted">В ячейке — плановые часы задач спринта и сколько часов команда может дать за спринт. Пусто — доступность не ограничена.</p>
+        <div className="table-wrap"><table className="data">
+          <thead><tr><th>Спринт</th>{teams.map((t: any) => <th key={t.id} className="r">{t.name}</th>)}</tr></thead>
+          <tbody>
+            {sprints.map((s: any) => (
+              <tr key={s.id}>
+                <td><b>{s.code}</b> <span className="small muted">{fmtD(s.start_date)}–{fmtD(s.end_date)}</span></td>
+                {teams.map((t: any) => {
+                  const cap = s.capacity?.[t.id];
+                  const over = (s.over_capacity ?? []).includes(t.id);
+                  return (
+                    <td key={t.id} className="r">
+                      <span className="num" style={over ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtH(s.load?.[t.id] ?? 0)}</span>
+                      <span className="muted"> / </span>
+                      {s.status === 'closed' ? <span className="num">{cap ?? '—'}</span> : (
+                        <input key={`${s.id}:${t.id}:${cap ?? ''}`} className="input sm" style={{ width: 64, textAlign: 'right' }} defaultValue={cap ?? ''} placeholder="—" aria-label={`${t.name}, спринт ${s.code}`} onBlur={(e) => {
+                          const v = e.target.value.trim();
+                          if (v === String(cap ?? '')) return;
+                          mutate('/planning/sprint-capacity', 'PUT', { sprint_id: s.id, team_id: t.id, hours: v === '' ? null : Number(v.replace(',', '.')) }, 'Доступность сохранена');
+                        }} />
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+      </div>
+    </section>
+  );
+}
+
+const fmtD = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;

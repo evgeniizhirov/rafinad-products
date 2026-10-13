@@ -1,56 +1,54 @@
 // One schema of columns for the XLSX file and the Google «Import» tab (FR-08). One row = one task.
-import { bool, type Row } from '../lib/db';
-import { canSee, initiatorDto, isProductInternal, type Indexes, type Viewer, type World } from '../lib/world';
+// Owner decision 13.10: the columns are those of the first connected sheet (TaskFlow), in its order.
+// A value the system does not have leaves the cell empty — nothing is invented.
+import type { Row } from '../lib/db';
+import type { Indexes, Viewer, World } from '../lib/world';
 import type { Cell } from './xlsx';
-
-const KIND = { planned: 'Плановая', bug: 'Баг', operational_improvement: 'Оперативная доработка' } as Record<string, string>;
-const URGENCY = { low: 'низкая', medium: 'средняя', high: 'высокая', critical: 'критическая' } as Record<string, string>;
-const VIS = { draft: 'черновик', internal: 'для сотрудников', public: 'опубликована' } as Record<string, string>;
-const INI = { free_text: 'человек', user: 'пользователь', department: 'отдел' } as Record<string, string>;
 
 interface Column {
   title: string;
   value: (f: Row) => Cell;
-  /** shown only to these viewers (default: everybody who may export) */
-  only?: Viewer[];
 }
 
-export function exportColumns(viewer: Viewer, w: World, idx: Indexes): Column[] {
-  const rel = (f: Row) => (idx.releaseOf.has(f.id) ? idx.release.get(idx.releaseOf.get(f.id)!) : undefined);
-  const est = (f: Row) => (idx.estimatesBy.get(f.id) ?? []).reduce((s, e) => s + Number(e.hours), 0);
+/** YYYY-MM-DD → DD.MM.YYYY (the sheet's date format; the importer reads it back) */
+const ruDate = (d: string | null | undefined) => (d && /^\d{4}-\d{2}-\d{2}/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
+const yesNo = (v: boolean) => (v ? 'Да' : 'Нет');
+const FACT_LINE = /^Факт: ([\d.,]+) ч$/m;
+const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+
+/** fact hours: the field (bugs, P05) or the «Факт: N ч» line the TaskFlow import writes into the description */
+function factHours(f: Row): number | null {
+  if (f.fact_hours !== null && f.fact_hours !== undefined) return Number(f.fact_hours);
+  const m = FACT_LINE.exec(f.description ?? '');
+  return m ? Number(m[1].replace(',', '.')) : null;
+}
+
+export const EXPORT_COLUMNS = ['Приоритет', 'Задача', 'Категория', 'Сотрудник', 'Изначальный срок', 'Новый срок', 'Дата выполнения', 'Оценка в часах', 'Факт в часах', 'Комментарий', 'Сделано', 'Влетевшая'] as const;
+
+export function exportColumns(_viewer: Viewer, _w: World, idx: Indexes): Column[] {
+  const tags = (f: Row) => idx.tagsBy.get(f.id) ?? [];
+  const deadline = (f: Row) => f.planned_production_date ?? f.planned_end ?? null;
+  const hours = (f: Row) => {
+    const est = idx.estimatesBy.get(f.id) ?? [];
+    return est.length ? Math.round(est.reduce((s, e) => s + Number(e.hours), 0) * 10) / 10 : null;
+  };
   const cols: Column[] = [
-    { title: 'ID', value: (f) => `RF-${f.number}` },
-    { title: 'Тип', value: (f) => KIND[f.task_kind ?? 'planned'] },
-    { title: 'Название', value: (f) => f.title },
-    { title: 'Описание', value: (f) => f.description ?? '' },
-    { title: 'Статус', value: (f) => idx.status.get(f.status_id)?.name ?? '' },
-    { title: 'Семантика статуса', value: (f) => idx.status.get(f.status_id)?.semantic ?? '' },
-    { title: 'Срочность', value: (f) => (f.urgency ? URGENCY[f.urgency] : '') },
-    { title: 'Инициатор', value: (f) => initiatorDto(f, w)?.name ?? '', only: ['employee', 'editor'] },
-    { title: 'Вид инициатора', value: (f) => (f.initiator_type ? INI[f.initiator_type] : ''), only: ['employee', 'editor'] },
-    { title: 'Автор запроса', value: (f) => f.author_name ?? '', only: ['employee', 'editor'] },
-    { title: 'Ответственный', value: (f) => f.assignee_name ?? '', only: ['employee', 'editor'] },
-    { title: 'Дата постановки', value: (f) => f.requested_at ?? f.created_at?.slice(0, 10) ?? '' },
+    // sheet priority is kept as a tag «P1», «P2»… by the import; department votes are a different thing
+    { title: 'Приоритет', value: (f) => { const p = tags(f).find((t) => /^P\d+$/i.test(t)); return p ? Number(p.slice(1)) : null; } },
+    { title: 'Задача', value: (f) => f.title },
     { title: 'Категория', value: (f) => idx.category.get(f.category_id)?.name ?? '' },
-    { title: 'Эпик', value: (f) => { const e = f.epic_id ? idx.epic.get(f.epic_id) : undefined; return e && canSee(viewer, e.visibility) ? e.title : ''; } },
-    { title: 'Релиз', value: (f) => { const r = rel(f); return r && canSee(viewer, r.visibility) ? r.name : ''; } },
-    { title: 'Спринт', value: (f) => (f.sprint_id ? idx.sprint.get(f.sprint_id)?.code ?? '' : '') },
-    { title: 'Фокус релиза', value: (f) => (bool(f.is_focus) ? 'да' : '') },
-    { title: 'Плановое начало', value: (f) => f.planned_start ?? '' },
-    { title: 'Плановое завершение', value: (f) => f.planned_end ?? '' },
-    { title: 'Плановая выкладка', value: (f) => f.planned_production_date ?? '' },
-    { title: 'Первоначально обещано', value: (f) => f.baseline_production_date ?? '', only: ['employee', 'editor'] },
-    { title: 'Завершена', value: (f) => f.closed_at ?? '' },
-    { title: 'Приоритет (балл)', value: (f) => idx.priority.get(f.id)?.score ?? null },
-    { title: 'Оценили отделов', value: (f) => (idx.votesBy.get(f.id) ?? []).length },
-    { title: 'Часы (оценка)', value: (f) => { const h = est(f); return h ? Math.round(h * 10) / 10 : null; } },
-    { title: 'Факт часов', value: (f) => f.fact_hours ?? null, only: ['employee', 'editor'] },
-    { title: 'Теги', value: (f) => (idx.tagsBy.get(f.id) ?? []).join(', ') },
-    { title: 'Внешний ID', value: (f) => f.external_ref ?? '', only: ['employee', 'editor'] },
-    { title: 'Публикация', value: (f) => VIS[f.visibility] ?? f.visibility, only: ['employee', 'editor'] },
-    { title: 'Внутренняя задача продукта', value: (f) => (isProductInternal(f) ? 'да' : ''), only: ['editor'] },
+    { title: 'Сотрудник', value: (f) => f.assignee_name ?? '' },
+    // the first promised date; when it was never fixed separately, the current deadline is the only one known
+    { title: 'Изначальный срок', value: (f) => ruDate(f.baseline_production_date ?? deadline(f)) },
+    { title: 'Новый срок', value: (f) => ruDate(deadline(f)) },
+    { title: 'Дата выполнения', value: (f) => ruDate(f.closed_at) },
+    { title: 'Оценка в часах', value: (f) => hours(f) },
+    { title: 'Факт в часах', value: (f) => num(factHours(f)) },
+    { title: 'Комментарий', value: (f) => (f.description ?? '').replace(FACT_LINE, '').replace(/\n{3,}/g, '\n\n').trim() },
+    { title: 'Сделано', value: (f) => yesNo(idx.status.get(f.status_id)?.semantic === 'done') },
+    { title: 'Влетевшая', value: (f) => yesNo(tags(f).some((t) => t.toLowerCase() === 'влетевшая')) },
   ];
-  return cols.filter((c) => !c.only || c.only.includes(viewer));
+  return cols;
 }
 
 export function exportTable(rows: Row[], viewer: Viewer, w: World, idx: Indexes): Cell[][] {
