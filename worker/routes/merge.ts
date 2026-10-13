@@ -137,6 +137,9 @@ export function registerMergeRoutes(r: Router) {
       else st.push(stmt(db, 'UPDATE feature_relations SET from_id = ?, to_id = ? WHERE id = ?', nr.from, nr.to, nr.rel.id));
     }
     // tags, comments, import sources, release membership
+    // proposals delivered by the duplicate are now delivered by the main card
+    st.push(stmt(db, 'INSERT OR IGNORE INTO proposal_features (proposal_id, feature_id, created_at, created_by) SELECT proposal_id, ?, created_at, created_by FROM proposal_features WHERE feature_id = ?', T, S));
+    st.push(stmt(db, 'DELETE FROM proposal_features WHERE feature_id = ?', S));
     // external links: moved to the main card; a URL it already has is not duplicated
     st.push(stmt(db, `UPDATE feature_links SET feature_id = ? WHERE feature_id = ? AND url NOT IN (SELECT url FROM feature_links WHERE feature_id = ?)`, T, S, T));
     st.push(stmt(db, 'DELETE FROM feature_links WHERE feature_id = ?', S));

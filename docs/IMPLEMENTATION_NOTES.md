@@ -486,3 +486,62 @@
 - исправление — пункт 7.5 ТЗ (отложен владельцем). У источников «Баги» и «Доработки» ID — ключ Jira из ссылки, он устойчив.
 
 **Тесты:** `tests/link-import.test.ts` (7).
+
+## v2-02 — «Предложения» · ветка `claude/v2-02-proposals` (миграция 0014)
+
+**Модель:**
+
+| Таблица | Что хранит |
+| --- | --- |
+| `proposals` | номер `P-N`, автор (`author_id` + снимок `author_name`), отдел-инициатор, `status`, `decision_reason`, `decided_*`, `implemented_at`, `merged_into_id`, `version` |
+| `proposal_votes` | одна оценка 1–5 на отдел; отдельно от `department_votes` задач |
+| `proposal_features` | связь многие-ко-многим с задачами |
+| `proposal_comments` | обсуждение; `moved_from` после слияния |
+
+История — `audit_log`, `entity_type = 'proposal'`.
+
+**Статусы** (`worker/domain/proposals.ts`, решения владельца 13.10):
+- `new` → `review` → `accepted` / `postponed` / `rejected`;
+- `accepted` → `planned`: **автоматически**, когда связанной задаче назначают спринт (хук в `PATCH /api/features/:id/schedule` и при связывании с задачей, у которой спринт уже есть); вручную — если разработка не нужна;
+- `planned` → `implemented`: только явным решением. Подсказка `delivery.all_done` появляется, когда все связанные задачи завершены;
+- `postponed` / `rejected` → `review`;
+- причина обязательна для `postponed` и `rejected`, её видят автор и все сотрудники.
+
+**Права:**
+
+| Действие | Кто |
+| --- | --- |
+| создать, смотреть все, комментировать | любой вошедший; гость — 401 |
+| менять текст | автор, пока `new` / `review`; product/admin всегда |
+| голосовать | только за свой отдел; admin — за любой, с причиной и `is_override` |
+| решения, связи с задачами, объединение | product/admin |
+| API-ключи | `GET /api/proposals*` — `tasks:read`; `POST /api/proposals` — `tasks:create`; голоса, решения и связи ключам недоступны |
+
+**Видимость задач:** список и карточка строятся по ACL задач. Скрытые задачи Product для остальных не попадают ни в список задач, ни в счётчики, ни в прогноз, ни в историю. Прогноз для бизнеса — поздняя плановая выкладка и релизы видимых незавершённых задач.
+
+**Объединение дублей:**
+- дубль остаётся с автором и историей, со ссылкой на основное, только для чтения;
+- связи с задачами и комментарии переносятся;
+- голос отдела переносится, только если у основного его нет — двойных голосов не бывает.
+
+При слиянии **задач** их связи с предложениями тоже переходят в основную.
+
+**API:**
+- `GET /api/proposals?q&status&department&author=me|<id>&from&to&sort=popular|newest|updated&include_merged=1`;
+- `GET /api/proposals/:ref` (`P-12` / номер / id);
+- `POST /api/proposals`;
+- `PATCH /api/proposals/:ref`;
+- `POST /api/proposals/:ref/status {status, reason?, version}`;
+- `PUT /api/proposals/:ref/votes/:departmentId`;
+- `POST /api/proposals/:ref/comments`;
+- `POST` / `DELETE /api/proposals/:ref/features[/:featureId]`;
+- `POST /api/proposals/:ref/merge {target_id, source_version, target_version, confirm: true}`.
+
+В карточке задачи (`GET /api/features/:id`) для вошедших — `proposals[]`.
+
+**UI:**
+- раздел «Предложения» для вошедших: поиск, фильтры (статус, отдел, автор, даты), сортировка по популярности;
+- страница предложения: потребность и ожидаемый результат, решение продукта, кнопки переходов, реализация (задачи и прогноз), обсуждение, оценки отделов, объединённые дубли, история;
+- в карточке задачи, вкладка «Связи» — «Реализует предложения».
+
+**Тесты:** `tests/proposals.test.ts` (8).

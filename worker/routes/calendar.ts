@@ -1,5 +1,6 @@
 // Calendar: releases of two sprints, accounting months, generator (FR-06), task schedule (release → sprint → production date).
 import { z } from 'zod';
+import { autoPlanStatements } from './proposals';
 import { planGeneration, validateAnchor, type CalendarAnchor } from '../domain/calendar';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
@@ -299,6 +300,8 @@ export function registerCalendarRoutes(r: Router) {
     const moved = !!f.sprint_id && !!b.sprint_id && f.sprint_id !== b.sprint_id;
     if (overBudget.length) changes.push({ field: 'over_budget', old: null, new: overBudget });
     st.push(auditStmt(db, user, 'feature', f.id, moved ? 'rescheduled' : 'scheduled', changes, b.reason ?? null, overBudget.length > 0));
+    // vNext §1.2: an accepted proposal becomes «Запланировано» when one of its tasks gets a sprint
+    if (b.sprint_id && b.sprint_id !== f.sprint_id) st.push(...(await autoPlanStatements(db, user, f.id)));
     await tx(db, st, 'Карточку изменил другой пользователь. Обновите данные.');
     return json({ ok: true, version: f.version + 1 });
   });

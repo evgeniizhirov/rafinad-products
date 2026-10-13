@@ -188,6 +188,9 @@ export function registerFeatureRoutes(r: Router) {
     if (mergedFrom) dto.merged_from = { id: mergedFrom.id, key: `RF-${mergedFrom.number}` };
     if (viewer !== 'guest') {
       dto.comments = await all(ctx.env.DB, 'SELECT id, author_name, body, created_at, moved_from FROM comments WHERE feature_id = ? ORDER BY created_at', f.id);
+      // business proposals this task delivers (vNext §1.2; proposals are visible to every employee)
+      dto.proposals = (await all(ctx.env.DB, `SELECT p.id, p.number, p.title, p.status FROM proposal_features pf JOIN proposals p ON p.id = pf.proposal_id
+        WHERE pf.feature_id = ? ORDER BY p.number`, f.id)).map((p) => ({ id: p.id, key: `P-${p.number}`, title: p.title, status: p.status }));
       const mergedIds = w.features.filter((x) => x.merged_into_id === f.id).map((x) => x.id);
       dto.merged_duplicates = w.features.filter((x) => x.merged_into_id === f.id).map((x) => ({ id: x.id, key: `RF-${x.number}`, title: x.title }));
       const ids = [f.id, ...mergedIds];

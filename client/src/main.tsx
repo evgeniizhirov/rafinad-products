@@ -12,6 +12,7 @@ import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
 import { Calendar } from './pages/Calendar';
 import { Analytics } from './pages/Analytics';
+import { ProposalDetail, Proposals } from './pages/Proposals';
 import { Budget } from './pages/Budget';
 import { Roadmap } from './pages/Roadmap';
 import { Sync } from './pages/Sync';
@@ -29,6 +30,7 @@ function Link({ to, children, className, onClick }: { to: string; children: Reac
 const NAV = [
   { to: '/', label: 'Обзор', icon: I.overview },
   { to: '/backlog', label: 'Бэклог', icon: I.backlog },
+  { to: '/proposals', label: 'Предложения', icon: I.idea, member: true },
   { to: '/epics', label: 'Эпики', icon: I.epics },
   { to: '/priorities', label: 'Приоритеты', icon: I.priorities },
   { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
@@ -92,6 +94,7 @@ function Routes() {
     case 'calendar': return <Calendar />;
     case 'budget': return <Budget />;
     case 'analytics': return <Analytics />;
+    case 'proposals': return seg[1] ? <ProposalDetail id={seg[1]} /> : <Proposals />;
     case 'sync': return <Sync />;
     case 'admin': return <Admin />;
     case 'account': return <Account />;

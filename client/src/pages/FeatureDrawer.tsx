@@ -466,11 +466,21 @@ function Links({ f }: { f: any }) {
   const [merging, setMerging] = useState(false);
   const remove = canEdit ? (id: string) => mutate(`/relations/${id}`, 'DELETE', undefined, 'Связь удалена') : undefined;
   const r = f.relations;
-  const empty = !Object.values(r).flat().length;
+  const empty = !Object.values(r).flat().length && !f.proposals?.length;
   return (
     <div className="stack loose">
       <BusinessBlockers f={f} canEdit={canEdit} />
       {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку или связанную задачу.' : null}</Empty>}
+      {f.proposals?.length > 0 && (
+        <div className="stack tight">
+          <div className="small muted">Реализует предложения</div>
+          {f.proposals.map((p: any) => (
+            <a key={p.id} href={`/proposals/${p.key}`} onClick={(e) => { e.preventDefault(); navigate(`/proposals/${p.key}`); }} className="row" style={{ padding: '2px 0', gap: 6 }}>
+              <I.idea style={{ width: 15, height: 15, color: 'var(--ink-3)' }} /><span className="key">{p.key}</span><span>{p.title}</span>
+            </a>
+          ))}
+        </div>
+      )}
       <RefList title="Блокирует" items={r.blocks} onRemove={remove} />
       <RefList title="Заблокирована задачами" items={r.blocked_by} onRemove={remove} />
       <RefList title="Связанные задачи" items={r.related} onRemove={remove} />
@@ -573,6 +583,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
 const ACTIONS: Record<string, string> = {
   created: 'создал(а) карточку', updated: 'изменил(а)', estimates_changed: 'изменил(а) оценки', vote: 'проголосовал(а)', vote_admin_override: 'изменил(а) оценку отдела (админ)',
   moved: 'перенёс(ла) в другой период', moved_over_capacity: 'перенёс(ла) с превышением лимита', plan_approved: 'утвердил(а) размещение по плану',
+  proposal_linked: 'связал(а) с предложением', proposal_unlinked: 'убрал(а) связь с предложением', import_links: 'обновил(а) ссылки из импорта',
   link_added: 'добавил(а) внешнюю ссылку', link_changed: 'изменил(а) внешнюю ссылку', link_removed: 'удалил(а) внешнюю ссылку',
   relation_added: 'добавил(а) связь', relation_removed: 'удалил(а) связь', comment_added: 'оставил(а) комментарий', merged_into: 'объединил(а) с другой карточкой',
   merged_from: 'присоединил(а) дубль', import_created: 'создано импортом', import_updated: 'обновлено импортом', import_linked: 'привязан источник импорта', import_relation: 'связь из импорта',

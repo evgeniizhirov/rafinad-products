@@ -352,7 +352,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
 }
 
 // ───────────────── feature picker ─────────────────
-export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти задачу по номеру или названию' }: { onPick: (f: any) => void; exclude?: string[]; placeholder?: string }) {
+export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти задачу по номеру или названию', autoFocus = true }: { onPick: (f: any) => void; exclude?: string[]; placeholder?: string; autoFocus?: boolean }) {
   const [q, setQ] = useState('');
   const dq = useDebounced(q, 200);
   const res = useApi<any>(dq.trim().length >= 1 ? `/features?q=${encodeURIComponent(dq.trim())}&sort=number&internal=all` : null);
@@ -361,7 +361,7 @@ export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти 
     <div className="stack tight">
       <div className="search">
         <I.search />
-        <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} autoFocus />
+        <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} autoFocus={autoFocus} />
       </div>
       {dq && (
         <div className="panel" style={{ maxHeight: 280, overflowY: 'auto' }}>

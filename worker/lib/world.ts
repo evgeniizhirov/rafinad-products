@@ -205,7 +205,7 @@ export function indexWorld(w: World): Indexes {
 
 // ───────────────────────── DTO builders ─────────────────────────
 
-const statusDto = (s: Row | undefined) => (s ? { id: s.id, name: s.name, semantic: s.semantic, color: s.color } : null);
+export const statusDto = (s: Row | undefined) => (s ? { id: s.id, name: s.name, semantic: s.semantic, color: s.color } : null);
 const categoryDto = (c: Row | undefined) => (c ? { id: c.id, name: c.name, color: c.color } : null);
 
 export function featureRef(f: Row | undefined, viewer: Viewer, idx: Indexes) {
