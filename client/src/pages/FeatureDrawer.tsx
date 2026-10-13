@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { ExternalLinks } from './ExternalLinks';
 import { PhasePanel } from './Phases';
-import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
+import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
 import { PurgeButton } from './Purge';
@@ -104,12 +104,6 @@ function About({ f }: { f: any }) {
         <dt>Категория</dt>
         <dd>{f.category?.name ?? <span className="muted">—</span>}</dd>
         {f.tags.length > 0 && (<><dt>Теги</dt><dd className="row wrap">{f.tags.map((t: string) => <span key={t} className="tag">{t}</span>)}</dd></>)}
-        {((f.task_kind ?? 'planned') === 'planned' || f.period) && (
-          <>
-            <dt>Плановый период</dt>
-            <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
-          </>
-        )}
         <dt>Релиз → спринт</dt>
         <dd>
           {f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}
@@ -222,7 +216,6 @@ function Resources({ f }: { f: any }) {
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const canPlan = !!me?.permissions.plan && !me.must_change_password;
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const { move, modal } = usePlacement();
   useEffect(() => {
     setDraft({});
   }, [f.version, JSON.stringify(f.estimates)]);
@@ -286,26 +279,6 @@ function Resources({ f }: { f: any }) {
         </div>
       )}
       <ScheduleSection f={f} canEdit={canEdit} />
-      <section className="stack">
-        <h3 style={{ fontSize: 15 }}>Плановый период</h3>
-        {canPlan ? (
-          <div className="row wrap">
-            <select className="select" style={{ maxWidth: 260 }} value={f.period?.id ?? ''} onChange={(e) => move(f, e.target.value || null)}>
-              <option value="">Не запланирована</option>
-              {meta.periods.filter((p) => p.is_active).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            {f.period && (
-              <label className="check">
-                <input type="checkbox" checked={f.placement_locked} onChange={(e) => move(f, f.period.id, { lock: e.target.checked })} />
-                Размещение утверждено (планировщик его не двигает)
-              </label>
-            )}
-          </div>
-        ) : (
-          <p>{f.period ? f.period.name : <span className="muted">Не запланирована</span>}</p>
-        )}
-      </section>
-      {modal}
     </div>
   );
 }
@@ -610,7 +583,7 @@ function History({ f }: { f: any }) {
     if (field === 'status_id') return meta.statuses.find((s) => s.id === v)?.name ?? v;
     if (field === 'stage_id') return meta.stages.find((s) => s.id === v)?.name ?? v;
     if (field === 'category_id') return meta.categories.find((s) => s.id === v)?.name ?? v;
-    if (field === 'period_id') return meta.periods.find((s) => s.id === v)?.name ?? v;
+    if (field === 'period_id') return v ? 'плановый период (удалён)' : v;
     if (field === 'placement_locked') return v ? 'да' : 'нет';
     if (field === 'description' || field === 'private_notes') return String(v).length > 80 ? `${String(v).slice(0, 80)}…` : String(v);
     if (Array.isArray(v)) return v.join(', ') || '—';

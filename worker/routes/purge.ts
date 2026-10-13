@@ -160,7 +160,6 @@ async function featurePlan(db: D1Database, rec: Row): Promise<Plan> {
         del('feature_links'), del('proposal_features'), del('feature_plan_baselines'), del('feature_phase_events'), del('feature_phase_forecasts'),
         stmt(db, `DELETE FROM feature_relations WHERE from_id IN (${IN}) OR to_id IN (${IN})`, ...ids, ...ids),
         ...importStatements(db, 'feature', ids, links, keyById, user, now),
-        stmt(db, `DELETE FROM plan_alerts WHERE entity_id IN (${IN})`, ...ids),
         stmt(db, `DELETE FROM audit_log WHERE entity_type = 'feature' AND entity_id IN (${IN})`, ...ids),
         ...snaps.map((s) => {
           const data = parseJson<Row>(s.data, {});

@@ -108,12 +108,8 @@ export function registerCalendarRoutes(r: Router) {
       releases,
       months: viewer === 'guest' ? [] : w.months.map((m) => ({ id: m.id, month: m.month, start_date: m.start_date, end_date: m.end_date, status: m.status, budget_limit_rub: viewer === 'editor' ? m.budget_limit_rub : undefined })),
     };
-    if (viewer === 'editor') {
-      // tasks placed in old planning periods that have no sprint yet: need a manual decision (never mapped automatically)
-      out.unmapped = visibleFeatures(w, viewer)
-        .filter((f) => isPlannable(f) && f.period_id && !f.sprint_id && !isClosed(f, idx))
-        .map((f) => ({ id: f.id, key: `RF-${f.number}`, title: f.title, period: idx.period.get(f.period_id)?.name ?? null, release_id: idx.releaseOf.get(f.id) ?? null }));
-    }
+    // the old planning periods were removed (v2-10): nothing is left to map to sprints; key kept for compatibility
+    if (viewer === 'editor') out.unmapped = [];
     return json(out);
   });
 

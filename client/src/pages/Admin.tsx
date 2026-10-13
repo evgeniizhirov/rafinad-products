@@ -5,7 +5,7 @@ import { I } from '../icons';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, ROLE_LABEL, toast, useApi, useApp, useQueryParam } from '../lib';
 import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs, useDirty } from '../ui';
 
-type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods' | 'settings' | 'audit' | 'apikeys' | 'rates';
+type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'settings' | 'audit' | 'apikeys' | 'rates';
 
 export function Admin() {
   const { me } = useApp();
@@ -23,7 +23,6 @@ export function Admin() {
           { id: 'users', label: 'Пользователи' },
           { id: 'departments', label: 'Отделы и веса' },
           { id: 'teams', label: 'Ресурсные команды' },
-          { id: 'periods', label: 'Плановые периоды' },
           { id: 'categories', label: 'Категории' },
           { id: 'statuses', label: 'Статусы' },
           { id: 'stages', label: 'Этапы' },
@@ -184,8 +183,8 @@ function UserForm({ user, onClose, onCreated }: { user: any | null; onClose: () 
 }
 
 // ───────────────── dictionaries ─────────────────
-type DictKind = 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'periods';
-const META_KEY: Record<DictKind, string> = { departments: 'departments', teams: 'teams', categories: 'categories', statuses: 'statuses', stages: 'stages', periods: 'periods' };
+type DictKind = 'departments' | 'teams' | 'categories' | 'statuses' | 'stages';
+const META_KEY: Record<DictKind, string> = { departments: 'departments', teams: 'teams', categories: 'categories', statuses: 'statuses', stages: 'stages' };
 const ENTITY: Record<string, string> = { feature: 'Задачи', epic: 'Эпики', release: 'Релизы' };
 const SEMANTIC: Record<string, string> = { new: 'новая', analysis: 'проработка', ready: 'готова к планированию', planned: 'запланирована', in_progress: 'в работе', blocked: 'заблокирована', postponed: 'отложена', done: 'завершена', cancelled: 'отменена', active: 'активна' };
 
@@ -197,7 +196,6 @@ function Dictionary({ kind }: { kind: DictKind }) {
   const hint: Record<DictKind, string> = {
     departments: 'Голосующие бизнес-подразделения. Вес влияет на общий балл; отдел с отметкой «Product» решает при равенстве баллов.',
     teams: 'Команды, чьи часы планируются. Колонка Google Sheets по умолчанию — <код>_hours.',
-    periods: 'Периоды планирования (месяц, спринт). Часы команд по периодам задаются в разделе «Роадмап → Ресурсы и план».',
     categories: 'Категории для задач и эпиков.',
     statuses: 'Смысловая группа определяет поведение: что планируется, когда ставится дата завершения. Название можно менять свободно.',
     stages: 'Этап выполнения (Product, Backend, QA…) — отдельное поле, не статус.',
@@ -211,10 +209,9 @@ function Dictionary({ kind }: { kind: DictKind }) {
             <thead>
               <tr>
                 <th>Название</th>
-                {kind !== 'categories' && kind !== 'periods' && <th>Код</th>}
+                {kind !== 'categories' && <th>Код</th>}
                 {kind === 'departments' && <><th className="r">Вес</th><th>Product</th></>}
                 {kind === 'statuses' && <><th>Для</th><th>Смысл</th></>}
-                {kind === 'periods' && <th>Даты</th>}
                 <th>Состояние</th>
                 <th />
               </tr>
@@ -224,10 +221,9 @@ function Dictionary({ kind }: { kind: DictKind }) {
               {rows.map((r) => (
                 <tr key={r.id}>
                   <td>{kind === 'statuses' ? <StatusPill status={r} /> : <span className="row">{r.color && <span className="cube" style={{ background: r.color }} />}{r.name}</span>}</td>
-                  {kind !== 'categories' && kind !== 'periods' && <td className="small muted">{r.code}</td>}
+                  {kind !== 'categories' && <td className="small muted">{r.code}</td>}
                   {kind === 'departments' && <><td className="r num">{r.weight}</td><td>{r.is_product ? 'да' : ''}</td></>}
                   {kind === 'statuses' && <><td className="small">{ENTITY[r.entity]}</td><td className="small">{SEMANTIC[r.semantic] ?? r.semantic}</td></>}
-                  {kind === 'periods' && <td className="small">{fmtDate(r.start_date)} — {fmtDate(r.end_date)}</td>}
                   <td>{r.is_active ? <span className="pill ok">активен</span> : <span className="pill outline">отключён</span>}</td>
                   <td className="r"><button className="btn sm" onClick={() => setEdit(r)}>Изменить</button></td>
                 </tr>
@@ -256,7 +252,6 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
     if (['teams', 'categories', 'statuses'].includes(kind)) body.color = v.color;
     if (['teams', 'categories', 'statuses', 'stages'].includes(kind)) body.sort_order = Number(v.sort_order);
     if (kind === 'statuses' && !row) Object.assign(body, { entity: v.entity, semantic: v.semantic });
-    if (kind === 'periods') Object.assign(body, { start_date: v.start_date, end_date: v.end_date });
     if (kind === 'stages') body.phase = v.phase || null;
     if (row) body.is_active = v.is_active;
     const r = row ? await mutate(`/admin/dict/${kind}/${row.id}`, 'PATCH', { ...body, version: row.version }, 'Сохранено') : await mutate(`/admin/dict/${kind}`, 'POST', body, 'Добавлено');
@@ -295,12 +290,6 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
           </Field>
         )}
         {['departments', 'teams', 'categories', 'statuses', 'stages'].includes(kind) && <Field label="Порядок"><input className="input num" type="number" value={v.sort_order} onChange={(e) => set('sort_order', e.target.value)} /></Field>}
-        {kind === 'periods' && (
-          <>
-            <Field label="Начало"><input className="input" type="date" value={v.start_date} onChange={(e) => set('start_date', e.target.value)} /></Field>
-            <Field label="Окончание"><input className="input" type="date" value={v.end_date} onChange={(e) => set('end_date', e.target.value)} /></Field>
-          </>
-        )}
         {row && <label className="check span2"><input type="checkbox" checked={v.is_active} onChange={(e) => set('is_active', e.target.checked)} />Активна (отключённые записи скрыты из выбора, история сохраняется)</label>}
       </div>
     </Modal>
@@ -318,13 +307,6 @@ function Settings() {
     <div className="panel">
       <div className="panel-body stack loose">
         <label className="check"><input type="checkbox" checked={s.public_show_estimates} onChange={(e) => save({ public_show_estimates: e.target.checked })} />Показывать гостям оценки трудозатрат опубликованных задач</label>
-        <label className="check"><input type="checkbox" checked={s.public_show_capacity} onChange={(e) => save({ public_show_capacity: e.target.checked })} />Показывать гостям загрузку команд</label>
-        <div className="row">
-          <label htmlFor="hz">Горизонт планирования по умолчанию, периодов:</label>
-          <select id="hz" className="select" style={{ width: 90 }} value={s.planning_horizon} onChange={(e) => save({ planning_horizon: Number(e.target.value) })}>
-            {[1, 2, 3, 4, 5, 6, 8, 12].map((n) => <option key={n}>{n}</option>)}
-          </select>
-        </div>
         <ExportSettings save={save} />
         <p className="small muted">Гости видят только опубликованные карточки, эпики и релизы. Черновики, внутренние комментарии, приватные заметки, email сотрудников, настройки интеграций и история изменений в публичный API не попадают.</p>
       </div>

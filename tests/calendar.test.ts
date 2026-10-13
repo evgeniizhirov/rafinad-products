@@ -92,8 +92,6 @@ describe('calendar API', () => {
     const g = await app.call('POST', '/api/calendar/generate', { plan_hash: preview.plan_hash }, pm);
     assert.ok(g.status === 200 || g.status === 409);
     assert.equal(app.one("SELECT COUNT(*) AS n FROM sprints WHERE code = '8.1'").n, 1);
-    // old planning periods are untouched
-    assert.ok(app.one('SELECT COUNT(*) AS n FROM features WHERE period_id IS NOT NULL').n > 0);
   });
 
   test('task schedule: release → sprint → production date; move keeps baseline; bugs only reference a sprint (T07)', async () => {
@@ -205,7 +203,7 @@ describe('calendar API', () => {
     assert.equal(app.one('SELECT baseline_production_date FROM features WHERE id = ?', id).baseline_production_date, '2026-11-12');
   });
 
-  test('calendar view: guests see public releases only; unmapped legacy placements are listed for product', async () => {
+  test('calendar view: guests see public releases only; nothing is left of the old periods to map (v2-10)', async () => {
     const app = await setup();
     const pm = await app.user('pm@test.io', 'product');
     await generate(app, pm);
@@ -215,6 +213,6 @@ describe('calendar API', () => {
     const view = (await app.call('GET', '/api/calendar', undefined, pm)).body;
     assert.equal(view.releases[0].cycle_number, 8);
     assert.equal(view.releases[0].sprints.length, 2);
-    assert.ok(view.unmapped.length > 0, 'old period placements need a manual sprint decision');
+    assert.deepEqual(view.unmapped, [], 'the old planning periods were removed');
   });
 });

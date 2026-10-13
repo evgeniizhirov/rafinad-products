@@ -14,14 +14,6 @@ export function Overview() {
     <>
       <PageHead title="Обзор" sub="Общий план релизов: этапы каждой задачи, исходный план, факт и прогноз. Одна картина для бизнеса и продукта." />
       <GuestNote />
-      {me && data.alerts > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <Notice kind="warn">
-            Утверждённый план требует повторной проверки: {data.alerts} {plural(data.alerts, 'изменение', 'изменения', 'изменений')} ёмкости, весов или оценок.{' '}
-            <a href="/roadmap?tab=plan" onClick={go('/roadmap?tab=plan')} style={{ fontWeight: 600, textDecoration: 'underline' }}>Открыть план</a>
-          </Notice>
-        </div>
-      )}
       <div className="kpis overview-kpis">
         {[
           { to: '/backlog?flag=open', n: k.open, label: 'открытых задач' },

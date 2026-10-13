@@ -1,4 +1,4 @@
-// Shared feature widgets: form, vote picker, placement control, feature picker.
+// Shared feature widgets: form, vote picker, feature picker.
 import { useMemo, useState } from 'react';
 import { I } from './icons';
 import { api, ApiError, invalidate, mutate, openFeature, toast, useApi, useApp, useClickOutside, useDebounced, useDict } from './lib';
@@ -45,7 +45,7 @@ export function FeatureCard({ f, draggable, onDragStart, onDragEnd, warn, extra 
   const [dragging, setDragging] = useState(false);
   return (
     <div
-      className={`card ${dragging ? 'dragging' : ''} ${warn ? 'warn' : ''} ${f.placement_locked ? 'locked' : ''}`}
+      className={`card ${dragging ? 'dragging' : ''} ${warn ? 'warn' : ''}`}
       draggable={draggable}
       onDragStart={(e) => { setDragging(true); e.dataTransfer.setData('text/plain', f.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(e); }}
       onDragEnd={() => { setDragging(false); onDragEnd?.(); }}
@@ -64,7 +64,6 @@ export function FeatureCard({ f, draggable, onDragStart, onDragEnd, warn, extra 
       <div className="meta">
         <StatusPill status={f.status} />
         {f.estimate_total != null && <span className="num">{f.estimate_total} ч</span>}
-        {f.placement_locked && <span title="Размещение утверждено"><I.lock style={{ width: 13, height: 13, verticalAlign: '-2px' }} /></span>}
         {f.release && <span className="ellipsis" style={{ maxWidth: 140 }}>{f.release.version_label ?? f.release.name}</span>}
         <VisBadge v={f.visibility !== 'public' ? f.visibility : undefined} />
       </div>
@@ -117,44 +116,6 @@ export function VoteControl({ feature, dept, vote }: { feature: any; dept: any; 
       )}
     </span>
   );
-}
-
-// ───────────────── placement (planning period) ─────────────────
-export function usePlacement() {
-  const [pending, setPending] = useState<{ feature: any; periodId: string | null; overload: any[] } | null>(null);
-  const move = async (feature: any, periodId: string | null, extra: Record<string, unknown> = {}) => {
-    try {
-      await api(`/features/${feature.id}/placement`, { method: 'PATCH', body: { period_id: periodId, version: feature.version, ...extra } });
-      invalidate();
-      toast(periodId ? `${feature.key} перенесена` : `${feature.key} снята с плана`);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'overload') setPending({ feature, periodId, overload: e.details?.overload ?? [] });
-      else {
-        toast((e as Error).message, 'error');
-        invalidate();
-      }
-    }
-  };
-  const modal = pending && (
-    <ReasonModal
-      title="Превышение доступных часов"
-      confirmText="Перенести с превышением"
-      onClose={() => setPending(null)}
-      onConfirm={async (reason) => {
-        const p = pending;
-        setPending(null);
-        await move(p.feature, p.periodId, { confirm_overload: true, reason });
-      }}
-    >
-      <p>После переноса {pending.feature.key} не хватит часов:</p>
-      <ul style={{ margin: 0, paddingLeft: 18 }}>
-        {pending.overload.map((o) => (
-          <li key={o.teamId}><b>{o.team_name}</b>: будет {o.plannedAfter} ч при ёмкости {o.capacity} ч (дефицит {o.over} ч)</li>
-        ))}
-      </ul>
-    </ReasonModal>
-  );
-  return { move, modal };
 }
 
 // ───────────────── feature form (create / edit) ─────────────────

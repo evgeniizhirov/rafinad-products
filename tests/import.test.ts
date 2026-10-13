@@ -171,12 +171,11 @@ describe('import: preview and decisions', () => {
     const { src } = await firstImport(app, pm);
     const f = app.one(`SELECT * FROM features WHERE external_ref = 'GS-105'`);
     await app.call('PUT', `/api/features/${f.id}/votes/dep_product`, { score: 5, expected_version: null }, pm);
-    await app.call('PATCH', `/api/features/${f.id}/placement`, { period_id: 'per_2026_12', lock: true, version: f.version }, pm);
     const rel = app.one(`SELECT version FROM releases WHERE id = 'rel_2'`);
     await app.call('PUT', '/api/releases/rel_2/features', { feature_ids: ['feat_002', 'feat_007', 'feat_006', f.id], version: rel.version }, pm);
     const before = {
       votes: app.many(`SELECT * FROM department_votes WHERE feature_id = ?`, f.id),
-      placement: app.one(`SELECT period_id, placement_locked FROM features WHERE id = ?`, f.id),
+      schedule: app.one(`SELECT sprint_id, planned_production_date, is_focus FROM features WHERE id = ?`, f.id),
       releases: app.many(`SELECT * FROM release_features ORDER BY feature_id`),
       approved: app.many(`SELECT id, approved_at FROM releases ORDER BY id`),
     };
@@ -185,7 +184,7 @@ describe('import: preview and decisions', () => {
     const run = await preview(app, pm, src);
     assert.equal((await app.call('POST', `/api/import/runs/${run.id}/apply`, {}, pm)).status, 200);
     assert.deepEqual(app.many(`SELECT * FROM department_votes WHERE feature_id = ?`, f.id), before.votes);
-    assert.deepEqual(app.one(`SELECT period_id, placement_locked FROM features WHERE id = ?`, f.id), before.placement);
+    assert.deepEqual(app.one(`SELECT sprint_id, planned_production_date, is_focus FROM features WHERE id = ?`, f.id), before.schedule);
     assert.deepEqual(app.many(`SELECT * FROM release_features ORDER BY feature_id`), before.releases);
     assert.deepEqual(app.many(`SELECT id, approved_at FROM releases ORDER BY id`), before.approved);
     assert.match(app.one(`SELECT title FROM features WHERE id = ?`, f.id).title, /обновлено/);

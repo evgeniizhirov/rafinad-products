@@ -19,7 +19,7 @@ import { registerPurgeRoutes } from './routes/purge';
 import { registerPhaseRoutes } from './routes/phases';
 import { registerProposalRoutes } from './routes/proposals';
 import { registerMergeRoutes } from './routes/merge';
-import { registerPlanningRoutes } from './routes/planning';
+import { registerRetiredRoutes } from './routes/retired';
 import { registerPriorityRoutes } from './routes/priorities';
 import { registerReleaseRoutes } from './routes/releases';
 
@@ -33,7 +33,7 @@ registerCatalogRoutes(router);
 registerReleaseRoutes(router);
 registerCalendarRoutes(router);
 registerBudgetRoutes(router);
-registerPlanningRoutes(router);
+registerRetiredRoutes(router);
 registerImportRoutes(router);
 registerAdminRoutes(router);
 registerApiKeyRoutes(router);

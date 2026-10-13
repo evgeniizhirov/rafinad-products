@@ -16,7 +16,6 @@ import { Calendar } from './pages/Calendar';
 import { Analytics } from './pages/Analytics';
 import { ProposalDetail, Proposals } from './pages/Proposals';
 import { Budget } from './pages/Budget';
-import { Roadmap } from './pages/Roadmap';
 import { Sync } from './pages/Sync';
 import { Avatar, Empty, Loading, Toasts } from './ui';
 import './styles.css';
@@ -35,7 +34,6 @@ const NAV = [
   { to: '/proposals', label: 'Предложения', icon: I.idea, member: true },
   { to: '/epics', label: 'Эпики', icon: I.epics },
   { to: '/priorities', label: 'Приоритеты', icon: I.priorities },
-  { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
   { to: '/calendar', label: 'Спринты', icon: I.calendar },
   { to: '/planner', label: 'Планировщик', icon: I.board, plan: true },
@@ -85,6 +83,14 @@ function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNav
   );
 }
 
+/** an old bookmark (e.g. /roadmap) lands on the page that replaced it */
+function Retired({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to, true);
+  }, [to]);
+  return null;
+}
+
 function Routes() {
   const { path } = useLocation();
   const seg = path.split('/').filter(Boolean);
@@ -93,7 +99,7 @@ function Routes() {
     case 'backlog': return <Backlog />;
     case 'epics': return <Epics />;
     case 'priorities': return <Priorities />;
-    case 'roadmap': return <Roadmap />;
+    case 'roadmap': return <Retired to="/" />; // v2-10: the roadmap by planning periods was removed — the Gantt is in «Обзор»
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;
     case 'calendar': return <Calendar />;
     case 'budget': return <Budget />;

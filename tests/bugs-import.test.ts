@@ -114,8 +114,8 @@ describe('bugs sync', () => {
     assert.equal(app.one('SELECT COUNT(*) AS n FROM feature_estimates WHERE feature_id = ?', b1.id).n, 0);
 
     // bugs never enter planning (T11 server side)
-    const plan = (await app.call('POST', '/api/planning/propose', {}, pm)).body;
-    assert.ok(!JSON.stringify(plan).includes(b1.id));
+    const plan = (await app.call('GET', '/api/planner', undefined, pm)).body;
+    assert.ok(!JSON.stringify(plan.queue).includes(b1.id));
     // bugs list
     const list = (await app.call('GET', '/api/features?kind=bug', undefined, pm)).body.features;
     assert.equal(list.length, 3);

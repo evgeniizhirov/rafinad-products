@@ -35,8 +35,6 @@ export interface World {
   categories: Row[];
   statuses: Row[];
   stages: Row[];
-  periods: Row[];
-  capacities: Row[];
   settings: Record<string, string>;
   epics: Row[];
   features: Row[];
@@ -61,8 +59,8 @@ export interface World {
  * references them (votes, estimates, tags, relations, release links), so no list, counter, graph,
  * relation or aggregate built on the world can reveal them — not even as a "hidden" placeholder.
  * They stay only when product/admin explicitly ask for them (`includeInternal`): the task list with
- * `?internal=…` and the task card. General views (overview, roadmap, priorities, releases, epics,
- * planning) never include them, for any role.
+ * `?internal=…` and the task card. General views (overview, Gantt, priorities, releases, epics)
+ * never include them, for any role.
  */
 export async function loadWorld(db: D1Database, viewer: Viewer | 'system', opts: { includeInternal?: boolean } = {}): Promise<World> {
   const w = await loadAll(db);
@@ -101,8 +99,6 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM categories ORDER BY sort_order, name'),
     q('SELECT * FROM statuses ORDER BY entity, sort_order'),
     q('SELECT * FROM stages ORDER BY sort_order'),
-    q('SELECT * FROM capacity_periods ORDER BY start_date, id'),
-    q('SELECT * FROM team_capacities'),
     q('SELECT key, value FROM app_settings'),
     q('SELECT * FROM epics ORDER BY number'),
     q('SELECT * FROM features ORDER BY number'),
@@ -120,11 +116,11 @@ async function loadAll(db: D1Database): Promise<World> {
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const settings: Record<string, string> = {};
-  for (const s of r(7)) settings[s.key] = s.value;
+  for (const s of r(5)) settings[s.key] = s.value;
   return {
-    departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
-    epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12),
-    relations: r(13), releases: r(14), releaseFeatures: r(15), users: r(16), sprints: r(17), months: r(18), blockers: r(19), links: r(20),
+    departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), settings,
+    epics: r(6), features: r(7), estimates: r(8), votes: r(9), tags: r(10),
+    relations: r(11), releases: r(12), releaseFeatures: r(13), users: r(14), sprints: r(15), months: r(16), blockers: r(17), links: r(18),
   };
 }
 
@@ -139,7 +135,6 @@ export interface Indexes {
   epic: Map<string, Row>;
   feature: Map<string, Row>;
   release: Map<string, Row>;
-  period: Map<string, Row>;
   sprint: Map<string, Row>;
   openBlockersBy: Map<string, Row[]>;
   linksBy: Map<string, Row[]>;
@@ -190,7 +185,6 @@ export function indexWorld(w: World): Indexes {
     epic: new Map(w.epics.map((s) => [s.id, s])),
     feature: new Map(w.features.map((s) => [s.id, s])),
     release: new Map(w.releases.map((s) => [s.id, s])),
-    period: new Map(w.periods.map((s) => [s.id, s])),
     sprint: new Map(w.sprints.map((s) => [s.id, s])),
     openBlockersBy: groupBy(w.blockers.filter((b) => !b.resolved_at), (b) => b.feature_id),
     linksBy: groupBy(w.links, (l) => l.feature_id),
@@ -235,7 +229,6 @@ export interface FeatureDtoOptions {
 export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts: FeatureDtoOptions = {}) {
   const epic = f.epic_id ? idx.epic.get(f.epic_id) : undefined;
   const release = idx.releaseOf.has(f.id) ? idx.release.get(idx.releaseOf.get(f.id)!) : undefined;
-  const period = f.period_id ? idx.period.get(f.period_id) : undefined;
   const pr = idx.priority.get(f.id)!;
   const estRows = idx.estimatesBy.get(f.id) ?? [];
   const activeTeams = w.teams.filter((t) => bool(t.is_active));
@@ -266,12 +259,13 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     planned_start: f.planned_start,
     planned_end: f.planned_end,
     closed_at: f.closed_at,
-    period: period ? { id: period.id, name: period.name, start_date: period.start_date, end_date: period.end_date } : null,
+    // the old planning periods were removed (vNext v2-10, migration 0018): keys kept for API compatibility
+    period: null,
     sprint: sprintRef(f.sprint_id ? idx.sprint.get(f.sprint_id) : undefined, viewer, idx),
     planned_production_date: f.planned_production_date ?? null,
     urgency: f.urgency ?? null,
     is_focus: bool(f.is_focus),
-    placement_locked: bool(f.placement_locked),
+    placement_locked: false,
     release: release && canSee(viewer, release.visibility)
       ? { id: release.id, name: release.name, version_label: release.version_label, planned_date: release.planned_date, approved: !!release.approved_at }
       : null,
@@ -424,11 +418,8 @@ export function metaDto(w: World, viewer: Viewer) {
     categories: w.categories.map((c) => ({ id: c.id, name: c.name, color: c.color, is_active: bool(c.is_active), sort_order: c.sort_order, version: c.version })),
     statuses: w.statuses.map((s) => ({ id: s.id, entity: s.entity, code: s.code, name: s.name, semantic: s.semantic, color: s.color, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
     stages: w.stages.map((s) => ({ id: s.id, code: s.code, name: s.name, phase: s.phase ?? null, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
-    periods: w.periods.map((p) => ({ id: p.id, name: p.name, start_date: p.start_date, end_date: p.end_date, is_active: bool(p.is_active), version: p.version })),
     settings: {
       public_show_estimates: w.settings.public_show_estimates === '1',
-      public_show_capacity: w.settings.public_show_capacity === '1',
-      planning_horizon: Number(w.settings.planning_horizon || 3),
     },
     viewer,
   };

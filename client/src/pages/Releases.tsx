@@ -145,7 +145,7 @@ export function ReleaseDetail({ id }: { id: string }) {
         </div>
         <div className="table-wrap">
           <table className="data">
-            <thead><tr><th>Задача</th><th>Статус</th><th>Приоритет</th><th>Период</th>{canPlan && <th />}</tr></thead>
+            <thead><tr><th>Задача</th><th>Статус</th><th>Приоритет</th><th>Спринт</th>{canPlan && <th />}</tr></thead>
             <tbody>
               {r.features.length === 0 && <tr><td colSpan={5}><Empty title="В релизе пока нет задач" /></td></tr>}
               {r.features.map((f: any) => (
@@ -153,7 +153,7 @@ export function ReleaseDetail({ id }: { id: string }) {
                   <td><div className="row top"><span className="key">{f.key}</span><FeatureTitle f={f} /></div></td>
                   <td><StatusPill status={f.status} /></td>
                   <td><Cubes score={f.priority.score} /></td>
-                  <td className="small">{f.period?.name ?? <span className="muted">—</span>}</td>
+                  <td className="small">{f.sprint && !f.sprint.hidden ? f.sprint.code : <span className="muted">—</span>}</td>
                   {canPlan && <td className="r"><button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); setComposition(r.feature_ids.filter((x: string) => x !== f.id)); }}>Исключить</button></td>}
                 </tr>
               ))}

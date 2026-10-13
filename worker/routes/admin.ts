@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, diffFields } from '../lib/audit';
-import { ANY_LOCKED_SQL, planAlertIfStmt } from '../lib/alerts';
 import { hashPassword, randomToken, sha256Hex, tempPassword } from '../lib/crypto';
 import { abortIf, all, first, guardVersion, newId, nowIso, placeholders, stmt, tx, type Row } from '../lib/db';
 import { parseSpreadsheetId } from '../lib/google';
@@ -72,12 +71,6 @@ const DICTS = {
     create: z.object({ code, name: z.string().trim().min(1).max(120), sort_order: z.number().int().default(0), phase: z.enum(['product', 'design', 'dev', 'qa', 'release']).nullable().optional() }),
     patch: z.object({ name: z.string().trim().min(1).max(120).optional(), is_active: z.boolean().optional(), sort_order: z.number().int().optional(), phase: z.enum(['product', 'design', 'dev', 'qa', 'release']).nullable().optional(), version: z.number().int() }),
     timestamps: false,
-  },
-  periods: {
-    table: 'capacity_periods',
-    create: z.object({ name: z.string().trim().min(1).max(120), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
-    patch: z.object({ name: z.string().trim().min(1).max(120).optional(), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), is_active: z.boolean().optional(), version: z.number().int() }),
-    timestamps: true,
   },
 } as const;
 type DictKind = keyof typeof DICTS;
@@ -206,7 +199,6 @@ export function registerAdminRoutes(r: Router) {
     const admin = requirePerm(ctx, perms.admin);
     const d = dictOf(ctx.params.kind);
     const body = (await readJson(ctx, d.create)) as Row;
-    if (ctx.params.kind === 'periods' && body.end_date < body.start_date) throw badRequest('Дата окончания раньше даты начала');
     const id = newId(ctx.params.kind.slice(0, 3));
     const now = nowIso();
     const cols = Object.keys(body);
@@ -235,11 +227,6 @@ export function registerAdminRoutes(r: Router) {
     for (const [k, v] of Object.entries(rest)) if (v !== undefined) patch[k] = toDb(v);
     const changes = diffFields(row, patch);
     if (!changes.length) return json({ ok: true, unchanged: true });
-    if (kind === 'periods') {
-      const s = patch.start_date ?? row.start_date;
-      const e = patch.end_date ?? row.end_date;
-      if (e < s) throw badRequest('Дата окончания раньше даты начала');
-    }
     const statements = [
       guardVersion(db, d.table, row.id, version),
       stmt(db, `UPDATE ${d.table} SET ${changes.map((c) => `${c.field} = ?`).join(', ')}${d.timestamps ? ', updated_at = ?' : ''}, version = version + 1 WHERE id = ?`,
@@ -247,9 +234,6 @@ export function registerAdminRoutes(r: Router) {
       auditStmt(db, admin, kind, row.id, 'updated', changes),
     ];
     if (kind === 'departments' && patch.is_product === 1) statements.splice(1, 0, stmt(db, 'UPDATE departments SET is_product = 0 WHERE is_product = 1 AND id <> ?', row.id));
-    if (kind === 'departments' && changes.some((c) => c.field === 'weight' || c.field === 'is_active')) {
-      statements.push(planAlertIfStmt(db, 'department_weight', `Изменён вес/активность отдела «${row.name}» — рейтинг пересчитан, проверьте утверждённый план`, 'department', row.id, ANY_LOCKED_SQL));
-    }
     await tx(db, statements);
     return json({ ok: true });
   });
@@ -259,8 +243,6 @@ export function registerAdminRoutes(r: Router) {
     const admin = requirePerm(ctx, perms.admin);
     const body = await readJson(ctx, z.object({
       public_show_estimates: z.boolean().optional(),
-      public_show_capacity: z.boolean().optional(),
-      planning_horizon: z.number().int().min(1).max(24).optional(),
       // calendar generator (FR-06): reference sprint start (a Wednesday) and its release number
       calendar_anchor_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 3, 'Опорная дата должна быть средой').optional(),
       calendar_anchor_release: z.number().int().min(1).max(10000).optional(),

@@ -36,7 +36,7 @@ tests/                автотесты
 
 ### Модель данных
 
-`users, roles, sessions, invites, login_attempts, departments, department_memberships, resource_teams, categories, statuses, stages, capacity_periods, team_capacities, app_settings, epics, features, feature_tags, feature_estimates, feature_relations, department_votes, releases, release_features, comments, audit_log, sheet_sources, import_runs, import_items, import_apply_locks, source_entity_links, plan_runs, plan_alerts`.
+`users, roles, sessions, invites, login_attempts, departments, department_memberships, resource_teams, categories, statuses, stages, app_settings, epics, features, feature_tags, feature_estimates, feature_relations, department_votes, releases, release_features, comments, audit_log, sheet_sources, import_runs, import_items, import_apply_locks, source_entity_links, sprints, accounting_months, sprint_capacities, team_rates, feature_blockers, feature_links, proposals (+ votes, features, comments), feature_plan_baselines, feature_phase_events, feature_phase_forecasts, import_tombstones, export_templates, api_keys, export_runs`. Старые плановые периоды (`capacity_periods`, `team_capacities`, `plan_runs`, `plan_alerts`) удалены миграцией 0018 (vNext v2-10).
 
 - **Статус и этап — разные поля.** У статуса есть смысловая группа (`new`, `analysis`, `ready`, `planned`, `in_progress`, `blocked`, `postponed`, `done`, `cancelled`). Благодаря ей администратор может переименовывать статусы и добавлять свои, не ломая планировщик и дату завершения.
 - **Связи:**
@@ -192,19 +192,14 @@ ID задачи вычисляется из текста задачи и исп�
   - ёмкость команд по периодам;
   - загрузка, остаток, процент и дефицит;
   - перенос задачи в перегруженный период только с подтверждением и причиной.
-- Предлагаемый план:
-  - детерминированный: приоритет, зависимости, ёмкость всех нужных команд;
-  - объяснения, почему задача не вошла;
-  - сохраняются дата расчёта, параметры и хеш входных данных;
-  - утверждение всего плана или его части; утверждение отклоняется, если данные изменились после расчёта.
-- Сигналы «утверждённый план требует проверки» при изменении ёмкости, весов отделов или оценок утверждённых задач. Утверждённые релизы автоматически не меняются.
-- Роадмап «Сейчас / Далее / Позже», шкала по периодам с перетаскиванием и предупреждениями о зависимостях и перегрузке, релизы (список, календарь, состав, готовность, блокировки, утверждение), обзорный дашборд.
+- Планирование по спринтам (vNext): «Планировщик» продуктовой команды — очередь по приоритету, спринты, часы команд против ёмкости, бюджет месяцев; изменение утверждённого релиза и превышение бюджета требуют причины. Старый автопланировщик по периодам и «Роадмап» по периодам удалены (v2-10).
+- «Обзор» с общим Гантом: релизы → спринты → задачи, у каждой задачи свои этапы (план, исходный план, факт, прогноз, отклонение); релизы (список, календарь, состав, готовность, блокировки, утверждение).
 - Импорт из Google Sheets и CSV с предпросмотром, дублями, конфликтами и защищёнными полями. Импорт атомарный и идемпотентный, ведётся журнал.
 
 ## Известные ограничения MVP
 
 - Пароли хешируются PBKDF2-SHA256 (100 000 итераций — максимум WebCrypto в Workers), а не Argon2id: Argon2 в WASM упирается в лимиты CPU Worker. Формат хеша версионирован, алгоритм можно сменить без миграции пользователей.
-- Вся оценка задачи относится к одному периоду; для объёмных задач используйте разбиение на этапы или связанные фичи.
+- Вся оценка задачи относится к одному спринту; для объёмных задач используйте разбиение на этапы или связанные задачи.
 - Если у задачи есть хотя бы одна оценка, команды без оценки показываются как «не оценено», но планировщик считает их ненужными. Чтобы явно указать, что команда не нужна, поставьте 0.
 - Синхронизация запускается только вручную, двусторонней синхронизации и расписания нет.
 - Отправки писем нет: ссылку-приглашение или временный пароль администратор передаёт сам.

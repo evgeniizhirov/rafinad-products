@@ -149,7 +149,7 @@ export function registerMergeRoutes(r: Router) {
     st.push(stmt(db, `UPDATE release_features SET feature_id = ? WHERE feature_id = ? AND NOT EXISTS (SELECT 1 FROM release_features WHERE feature_id = ?)`, T, S, T));
     st.push(stmt(db, 'DELETE FROM release_features WHERE feature_id = ?', S));
     // the source card stays (old links resolve to the target) and records the duplicate relation
-    st.push(stmt(db, 'UPDATE features SET merged_into_id = ?, period_id = NULL, placement_locked = 0, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', T, now, user.id, S));
+    st.push(stmt(db, 'UPDATE features SET merged_into_id = ?, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', T, now, user.id, S));
     st.push(stmt(db, 'INSERT OR IGNORE INTO feature_relations (id, type, from_id, to_id, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)', newId('rel'), 'duplicate_of', S, T, now, user.id));
     st.push(stmt(db, 'UPDATE features SET updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', now, user.id, T));
     st.push(auditStmt(db, user, 'feature', S, 'merged_into', [{ field: 'merged_into', old: null, new: `RF-${a.target.number}` }]));

@@ -1,5 +1,5 @@
 // Demonstration data for Rafinad Product Roadmap (deterministic ids so the seed is reproducible).
-// 26 features, 5 epics, 6 departments, 6 resource teams, 4 releases, 6 monthly periods.
+// 26 features, 5 epics, 6 departments, 6 resource teams, 4 releases.
 
 export const categories = [
   ['cat_platform', 'Платформа', '#5b6b8c'],
@@ -29,26 +29,6 @@ export const teams = [
   ['team_design', 'design', 'Design', '#c2507a'],
   ['team_devops', 'devops', 'DevOps', '#5d7a3a'],
 ] as const;
-
-export const periods = [
-  ['per_2026_10', 'Октябрь 2026', '2026-10-01', '2026-10-31'],
-  ['per_2026_11', 'Ноябрь 2026', '2026-11-01', '2026-11-30'],
-  ['per_2026_12', 'Декабрь 2026', '2026-12-01', '2026-12-31'],
-  ['per_2027_01', 'Январь 2027', '2027-01-01', '2027-01-31'],
-  ['per_2027_02', 'Февраль 2027', '2027-02-01', '2027-02-28'],
-  ['per_2027_03', 'Март 2027', '2027-03-01', '2027-03-31'],
-] as const;
-
-// hours per team: backend, frontend, product, qa, design, devops
-const full = [320, 240, 120, 160, 80, 80];
-export const capacity: Record<string, number[]> = {
-  per_2026_10: full,
-  per_2026_11: full,
-  per_2026_12: [280, 200, 100, 140, 60, 60],
-  per_2027_01: [220, 160, 80, 110, 50, 50],
-  per_2027_02: full,
-  per_2027_03: full,
-};
 
 export const users = [
   // id, email, name, role, departments
@@ -82,8 +62,6 @@ interface F {
   created: string;
   est?: Est;
   votes?: Record<string, number>;
-  period?: string;
-  locked?: boolean;
   tags?: string[];
   author?: string;
   assignee?: string;
@@ -94,9 +72,9 @@ interface F {
 const B = 'team_backend', FE = 'team_frontend', P = 'team_product', Q = 'team_qa', D = 'team_design', O = 'team_devops';
 
 export const features: F[] = [
-  { n: 1, title: 'Постбеки в реальном времени', desc: 'Передача статусов конверсий рекламодателю и вебмастеру без задержки: очередь, ретраи, подпись запросов, журнал доставки.', cat: 'cat_platform', epic: 'ep_4', status: 'st_f_progress', stage: 'stg_backend', vis: 'public', requested: '2026-06-10', created: '2026-06-10T09:00:00Z', est: { [B]: 60, [P]: 8, [Q]: 24, [O]: 16 }, votes: { dep_product: 5, dep_sales: 5, dep_affiliates: 4, dep_antifraud: 3 }, period: 'per_2026_10', locked: true, tags: ['postback', 'api'], author: 'Игорь Петров', assignee: 'Сергей Ковалёв', ext: 'RAF-412' },
-  { n: 2, title: 'Новая статистика в кабинете вебмастера', desc: 'Статистика по SubID, креативам и площадкам; сохранённые фильтры; сравнение периодов.', cat: 'cat_webmasters', epic: 'ep_1', status: 'st_f_progress', stage: 'stg_frontend', vis: 'public', requested: '2026-06-18', created: '2026-06-18T10:00:00Z', est: { [B]: 80, [FE]: 120, [P]: 24, [Q]: 40, [D]: 40 }, votes: { dep_product: 5, dep_affiliates: 5, dep_sales: 3, dep_support: 4 }, period: 'per_2026_10', locked: true, tags: ['кабинет', 'статистика'], author: 'Мария Кузнецова', assignee: 'Алина Руденко' },
-  { n: 3, title: 'Выплаты вебмастерам через СБП', desc: 'Выплата на карту по номеру телефона через СБП, лимиты, статусы и чеки.', cat: 'cat_finance', epic: 'ep_2', status: 'st_f_planned', stage: 'stg_product', vis: 'public', requested: '2026-07-02', created: '2026-07-02T08:30:00Z', est: { [B]: 100, [FE]: 40, [P]: 16, [Q]: 32, [O]: 16 }, votes: { dep_product: 4, dep_finance: 5, dep_affiliates: 5, dep_support: 4 }, period: 'per_2026_11', locked: true, tags: ['выплаты'], author: 'Олег Смирнов' },
+  { n: 1, title: 'Постбеки в реальном времени', desc: 'Передача статусов конверсий рекламодателю и вебмастеру без задержки: очередь, ретраи, подпись запросов, журнал доставки.', cat: 'cat_platform', epic: 'ep_4', status: 'st_f_progress', stage: 'stg_backend', vis: 'public', requested: '2026-06-10', created: '2026-06-10T09:00:00Z', est: { [B]: 60, [P]: 8, [Q]: 24, [O]: 16 }, votes: { dep_product: 5, dep_sales: 5, dep_affiliates: 4, dep_antifraud: 3 }, tags: ['postback', 'api'], author: 'Игорь Петров', assignee: 'Сергей Ковалёв', ext: 'RAF-412' },
+  { n: 2, title: 'Новая статистика в кабинете вебмастера', desc: 'Статистика по SubID, креативам и площадкам; сохранённые фильтры; сравнение периодов.', cat: 'cat_webmasters', epic: 'ep_1', status: 'st_f_progress', stage: 'stg_frontend', vis: 'public', requested: '2026-06-18', created: '2026-06-18T10:00:00Z', est: { [B]: 80, [FE]: 120, [P]: 24, [Q]: 40, [D]: 40 }, votes: { dep_product: 5, dep_affiliates: 5, dep_sales: 3, dep_support: 4 }, tags: ['кабинет', 'статистика'], author: 'Мария Кузнецова', assignee: 'Алина Руденко' },
+  { n: 3, title: 'Выплаты вебмастерам через СБП', desc: 'Выплата на карту по номеру телефона через СБП, лимиты, статусы и чеки.', cat: 'cat_finance', epic: 'ep_2', status: 'st_f_planned', stage: 'stg_product', vis: 'public', requested: '2026-07-02', created: '2026-07-02T08:30:00Z', est: { [B]: 100, [FE]: 40, [P]: 16, [Q]: 32, [O]: 16 }, votes: { dep_product: 4, dep_finance: 5, dep_affiliates: 5, dep_support: 4 }, tags: ['выплаты'], author: 'Олег Смирнов' },
   { n: 4, title: 'Автоматическая сверка конверсий с рекламодателем', desc: 'Загрузка реестров рекламодателя, автоматическое сопоставление и отчёт о расхождениях.', cat: 'cat_advertisers', epic: 'ep_4', status: 'st_f_ready', vis: 'public', requested: '2026-07-15', created: '2026-07-15T12:00:00Z', est: { [B]: 120, [FE]: 30, [P]: 24, [Q]: 40 }, votes: { dep_product: 4, dep_sales: 5, dep_finance: 4 }, tags: ['сверка'], author: 'Игорь Петров' },
   { n: 5, title: 'Антифрод-скоринг трафика в реальном времени', desc: 'Оценка каждого клика и лида по набору признаков; автоматическая блокировка подозрительных источников.', cat: 'cat_antifraud', epic: 'ep_3', status: 'st_f_analysis', stage: 'stg_product', vis: 'internal', requested: '2026-07-20', created: '2026-07-20T09:15:00Z', est: { [B]: 200, [P]: 40, [Q]: 40, [O]: 40 }, votes: { dep_antifraud: 5, dep_sales: 4, dep_product: 4, dep_finance: 3 }, tags: ['антифрод', 'ml'], author: 'Дмитрий Волков' },
   { n: 6, title: 'Двухфакторная аутентификация для вебмастеров', desc: 'TOTP и подтверждение входа по email; обязательная 2FA для смены реквизитов выплат.', cat: 'cat_security', epic: 'ep_1', status: 'st_f_ready', vis: 'public', requested: '2026-07-28', created: '2026-07-28T11:00:00Z', est: { [B]: 40, [FE]: 40, [P]: 8, [Q]: 16, [D]: 8 }, votes: { dep_product: 4, dep_support: 5, dep_antifraud: 4, dep_affiliates: 3 }, tags: ['безопасность'], author: 'Мария Кузнецова' },
@@ -110,7 +88,7 @@ export const features: F[] = [
   { n: 14, title: 'Отчёт по когортам и LTV для рекламодателей', desc: 'Когортный анализ по дате регистрации клиента, LTV по источникам трафика.', cat: 'cat_analytics', epic: 'ep_5', status: 'st_f_analysis', vis: 'public', requested: '2026-09-03', created: '2026-09-03T12:00:00Z', est: { [B]: 80, [FE]: 60, [P]: 24, [Q]: 16, [D]: 16 }, votes: { dep_sales: 4, dep_product: 3 }, author: 'Игорь Петров' },
   { n: 15, title: 'Реферальная программа для вебмастеров', desc: 'Вознаграждение за привлечённых вебмастеров, отдельная статистика рефералов.', cat: 'cat_webmasters', epic: 'ep_1', status: 'st_f_postponed', vis: 'public', requested: '2026-09-05', created: '2026-09-05T14:00:00Z', est: { [B]: 40, [FE]: 40, [P]: 16, [Q]: 16 }, votes: { dep_affiliates: 3, dep_sales: 2 }, author: 'Мария Кузнецова' },
   { n: 16, title: 'Ролевая модель для менеджеров рекламодателя', desc: 'Несколько пользователей у рекламодателя с разными правами: финансы, статистика, офферы.', cat: 'cat_advertisers', epic: 'ep_4', status: 'st_f_ready', vis: 'public', requested: '2026-09-08', created: '2026-09-08T10:00:00Z', est: { [B]: 50, [FE]: 50, [P]: 16, [Q]: 20, [D]: 12 }, votes: { dep_sales: 4, dep_support: 3, dep_product: 3 }, author: 'Игорь Петров' },
-  { n: 17, title: 'Миграция трекинга на новый кластер БД', desc: 'Перенос трекинговых таблиц на новый кластер с шардированием по дате.', cat: 'cat_platform', status: 'st_f_progress', stage: 'stg_backend', vis: 'internal', requested: '2026-09-10', created: '2026-09-10T09:00:00Z', est: { [B]: 80, [Q]: 16, [O]: 80 }, votes: { dep_product: 4, dep_antifraud: 3 }, period: 'per_2026_10', locked: true, tags: ['инфраструктура'], author: 'Анна Соколова', assignee: 'Павел Никитин' },
+  { n: 17, title: 'Миграция трекинга на новый кластер БД', desc: 'Перенос трекинговых таблиц на новый кластер с шардированием по дате.', cat: 'cat_platform', status: 'st_f_progress', stage: 'stg_backend', vis: 'internal', requested: '2026-09-10', created: '2026-09-10T09:00:00Z', est: { [B]: 80, [Q]: 16, [O]: 80 }, votes: { dep_product: 4, dep_antifraud: 3 }, tags: ['инфраструктура'], author: 'Анна Соколова', assignee: 'Павел Никитин' },
   { n: 18, title: 'Публичная страница статуса платформы', desc: 'Страница доступности трекинга, кабинета и API с историей инцидентов.', cat: 'cat_platform', status: 'st_f_done', vis: 'public', requested: '2026-07-01', created: '2026-07-01T09:00:00Z', est: { [B]: 16, [FE]: 16, [O]: 16 }, votes: { dep_support: 4, dep_product: 3 }, closed: '2026-09-22', author: 'Мария Кузнецова', ext: 'RAF-530' },
   { n: 19, title: 'Креативы и лендинги: библиотека материалов', desc: 'Единая библиотека баннеров, текстов и лендингов по офферам с правами использования.', cat: 'cat_webmasters', epic: 'ep_1', status: 'st_f_ready', vis: 'public', requested: '2026-09-12', created: '2026-09-12T11:00:00Z', est: { [B]: 30, [FE]: 50, [P]: 8, [Q]: 16, [D]: 40 }, votes: { dep_affiliates: 4, dep_sales: 4, dep_product: 3 }, author: 'Мария Кузнецова' },
   { n: 20, title: 'Лимиты и капы по офферу в реальном времени', desc: 'Дневные и общие капы с автоматической остановкой трафика и уведомлениями.', cat: 'cat_advertisers', epic: 'ep_4', status: 'st_f_ready', vis: 'public', requested: '2026-09-15', created: '2026-09-15T09:30:00Z', est: { [B]: 70, [FE]: 20, [P]: 12, [Q]: 24 }, votes: { dep_sales: 5, dep_finance: 3, dep_affiliates: 3 }, author: 'Игорь Петров' },

@@ -23,10 +23,6 @@ export function seedSql(): string[] {
   S.departments.forEach(([id, code, name, weight, isProduct], i) =>
     out.push(ins('departments', { id, code, name, weight, is_product: isProduct, sort_order: i, created_at: T0, updated_at: T0 })));
   S.teams.forEach(([id, code, name, color], i) => out.push(ins('resource_teams', { id, code, name, color, sort_order: i, created_at: T0, updated_at: T0 })));
-  for (const [id, name, start, end] of S.periods) out.push(ins('capacity_periods', { id, name, start_date: start, end_date: end, created_at: T0, updated_at: T0 }));
-  for (const [pid, hours] of Object.entries(S.capacity)) {
-    S.teams.forEach(([tid], i) => out.push(ins('team_capacities', { period_id: pid, team_id: tid, hours: hours[i], updated_at: T0 })));
-  }
   for (const [id, email, name, role, deps] of S.users) {
     out.push(ins('users', { id, email, name, role_code: role, password_hash: null, must_change_password: 1, is_active: 1, created_at: T0, updated_at: T0 }));
     for (const d of deps) out.push(ins('department_memberships', { user_id: id, department_id: d }));
@@ -39,7 +35,7 @@ export function seedSql(): string[] {
     out.push(ins('features', {
       id: fid(f.n), number: f.n, external_ref: f.ext ?? null, title: f.title, description: f.desc, category_id: f.cat, epic_id: f.epic ?? null,
       status_id: f.status, stage_id: f.stage ?? null, author_name: f.author ?? null, assignee_name: f.assignee ?? null, requested_at: f.requested,
-      closed_at: f.closed ?? null, visibility: f.vis ?? 'internal', period_id: f.period ?? null, placement_locked: f.locked ? 1 : 0,
+      closed_at: f.closed ?? null, visibility: f.vis ?? 'internal',
       created_at: f.created, updated_at: f.created, created_by: 'u_pm', updated_by: 'u_pm',
     }));
     for (const [team, hours] of Object.entries(f.est ?? {})) {

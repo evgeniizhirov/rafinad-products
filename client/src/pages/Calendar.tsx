@@ -1,4 +1,4 @@
-// Sprints and calendar months (FR-06): releases of two sprints, generator with preview, legacy placements to map.
+// Sprints and calendar months (FR-06): releases of two sprints, generator with preview.
 import { useState } from 'react';
 import { I } from '../icons';
 import { api, ApiError, fmtDate, invalidate, navigate, openFeature, toast, useApi, useApp } from '../lib';
@@ -78,19 +78,6 @@ export function Calendar() {
             </section>
           )}
 
-          {data.unmapped?.length > 0 && (
-            <section className="panel">
-              <div className="panel-head"><h2 className="grow">Задачи старых плановых периодов без спринта</h2><span className="small muted">{data.unmapped.length}</span></div>
-              <div className="panel-body stack tight">
-                <p className="small muted" style={{ margin: 0 }}>Плановые периоды не переводятся в спринты автоматически: откройте задачу и выберите релиз и спринт на вкладке «Ресурсы».</p>
-                {data.unmapped.map((f: any) => (
-                  <div key={f.id} className="list-item" onClick={() => openFeature(f.key)}>
-                    <span className="key">{f.key}</span><span className="grow ellipsis">{f.title}</span><span className="small muted">{f.period}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       )}
       {preview && <GeneratePreview preview={preview} onClose={() => setPreview(null)} />}
