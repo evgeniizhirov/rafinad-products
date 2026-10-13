@@ -29,7 +29,12 @@ describe('offers removed', () => {
     const list = await app.call('GET', '/api/features?offer=of_2051', undefined, pm);
     assert.equal(list.status, 200);
     assert.equal(list.body.total, 0);
-    assert.equal(app.one('SELECT COUNT(*) AS n FROM feature_offers').n, 0, 'nothing is written to the old link table');
+  });
+
+  test('migration 0012 dropped the offer tables and their statuses', async () => {
+    const app = await setup();
+    assert.equal(app.one("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('offers', 'feature_offers')").n, 0);
+    assert.equal(app.one("SELECT COUNT(*) AS n FROM statuses WHERE entity = 'offer'").n, 0);
   });
 
   test('import: the template has no Offers sheet; an old affects_offer relation is a clear row error, not a crash', async () => {

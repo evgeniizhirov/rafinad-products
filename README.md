@@ -36,7 +36,7 @@ tests/                автотесты
 
 ### Модель данных
 
-`users, roles, sessions, invites, login_attempts, departments, department_memberships, resource_teams, categories, statuses, stages, capacity_periods, team_capacities, app_settings, epics, features, feature_tags, feature_estimates, offers, feature_offers (не используются с vNext, удаляются миграцией 0012), feature_relations, department_votes, releases, release_features, comments, audit_log, sheet_sources, import_runs, import_items, import_apply_locks, source_entity_links, plan_runs, plan_alerts`.
+`users, roles, sessions, invites, login_attempts, departments, department_memberships, resource_teams, categories, statuses, stages, capacity_periods, team_capacities, app_settings, epics, features, feature_tags, feature_estimates, feature_relations, department_votes, releases, release_features, comments, audit_log, sheet_sources, import_runs, import_items, import_apply_locks, source_entity_links, plan_runs, plan_alerts`.
 
 - **Статус и этап — разные поля.** У статуса есть смысловая группа (`new`, `analysis`, `ready`, `planned`, `in_progress`, `blocked`, `postponed`, `done`, `cancelled`). Благодаря ей администратор может переименовывать статусы и добавлять свои, не ломая планировщик и дату завершения.
 - **Связи:**

@@ -398,3 +398,9 @@
 **Таблицы** `offers` / `feature_offers` и статусы `entity = 'offer'` остаются до миграции 0012 (PR v2-01b). Код к ним больше не обращается.
 
 **Тесты:** `tests/offers-removed.test.ts`; `catalog`, `import`, `task-foundation`, `access`, `smoke` обновлены.
+
+## v2-01b — миграция 0012: таблицы офферов удалены · ветка `claude/v2-01b-drop-offers`
+
+- `0012_drop_offers.sql`: `DROP TABLE feature_offers`, `DROP TABLE offers`, удаление статусов `entity = 'offer'`. На проде строк 0 (проверено 13.10).
+- Применять **после** выкладки v2-01: старый код читает эти таблицы в `loadWorld`, и без них прод упадёт. Порядок: merge v2-01 → деплой → миграция 0012 → merge v2-01b.
+- `statuses.entity` CHECK по-прежнему допускает `'offer'`. Пересоздавать таблицу ради ограничения не стали.
