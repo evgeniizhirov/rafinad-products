@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
 import { ExternalLinks } from './ExternalLinks';
+import { PhasePanel } from './Phases';
 import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
@@ -148,6 +149,7 @@ function About({ f }: { f: any }) {
         {f.external_ref && (<><dt>Внешний ID</dt><dd>{f.external_ref}</dd></>)}
         {f.sources?.length > 0 && (<><dt>Источники импорта</dt><dd>{f.sources.map((s: any) => <div key={s.source_id + s.external_id}>{s.source_name}: {s.external_id}</div>)}</dd></>)}
       </dl>
+      <PhasePanel f={f} />
       {f.links !== undefined && <ExternalLinks f={f} canEdit={canEditCard} />}
       {f.private_notes && (
         <div className="notice warn"><I.lock /><div><b>Приватная заметка.</b> <span className="pre">{f.private_notes}</span></div></div>
@@ -583,6 +585,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
 const ACTIONS: Record<string, string> = {
   created: 'создал(а) карточку', updated: 'изменил(а)', estimates_changed: 'изменил(а) оценки', vote: 'проголосовал(а)', vote_admin_override: 'изменил(а) оценку отдела (админ)',
   moved: 'перенёс(ла) в другой период', moved_over_capacity: 'перенёс(ла) с превышением лимита', plan_approved: 'утвердил(а) размещение по плану',
+  phase_changed: 'перевёл(а) на этап', phase_fact_corrected: 'исправил(а) дату этапа', phase_forecast: 'задал(а) прогноз этапа', baseline_captured: 'зафиксирован исходный план', baseline_revised: 'пересмотрел(а) исходный план',
   proposal_linked: 'связал(а) с предложением', proposal_unlinked: 'убрал(а) связь с предложением', import_links: 'обновил(а) ссылки из импорта',
   link_added: 'добавил(а) внешнюю ссылку', link_changed: 'изменил(а) внешнюю ссылку', link_removed: 'удалил(а) внешнюю ссылку',
   relation_added: 'добавил(а) связь', relation_removed: 'удалил(а) связь', comment_added: 'оставил(а) комментарий', merged_into: 'объединил(а) с другой карточкой',

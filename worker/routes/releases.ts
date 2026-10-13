@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { releaseBaselineStatements } from './phases';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, diffFields } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, placeholders, stmt, tx, type Row } from '../lib/db';
@@ -184,6 +185,11 @@ export function registerReleaseRoutes(r: Router) {
       ...removed.map((id) => ({ field: 'features', old: nums.get(id), new: null })),
     ], b.reason ?? null, !!rel.approved_at));
     await tx(db, st, 'Релиз изменил другой пользователь. Обновите данные.');
+    // a task added to an already approved release (explicitly confirmed change) is agreed from now on
+    if (rel.approved_at && added.length) {
+      const bl = await releaseBaselineStatements(db, user, rel.id);
+      if (bl.length) await tx(db, bl);
+    }
     return json({ ok: true });
   });
 
@@ -199,6 +205,8 @@ export function registerReleaseRoutes(r: Router) {
       guardVersion(db, 'releases', rel.id, b.version),
       stmt(db, 'UPDATE releases SET approved_at = ?, approved_by = ?, updated_at = ?, version = version + 1 WHERE id = ?', b.approved ? now : null, b.approved ? user.id : null, now, rel.id),
       auditStmt(db, user, 'release', rel.id, b.approved ? 'approved' : 'unapproved'),
+      // vNext §2.2: approving the release plan fixes the baseline of its planned tasks (only those without one)
+      ...(b.approved ? await releaseBaselineStatements(db, user, rel.id) : []),
     ], 'Релиз изменил другой пользователь. Обновите данные.');
     return json({ ok: true });
   });

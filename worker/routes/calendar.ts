@@ -1,5 +1,6 @@
 // Calendar: releases of two sprints, accounting months, generator (FR-06), task schedule (release → sprint → production date).
 import { z } from 'zod';
+import { baselineStatements } from './phases';
 import { autoPlanStatements } from './proposals';
 import { planGeneration, validateAnchor, type CalendarAnchor } from '../domain/calendar';
 import { perms, requirePerm } from '../lib/auth';
@@ -285,7 +286,7 @@ export function registerCalendarRoutes(r: Router) {
       // production date: explicit value, else the sprint deadline, else the release date
       const date = b.planned_production_date !== undefined ? b.planned_production_date : sprint ? sprint.production_due : targetRelease?.planned_date ?? null;
       patch.planned_production_date = date;
-      if (date && !f.baseline_production_date) patch.baseline_production_date = date; // first promise is kept for analytics
+      // the first promise (baseline) is fixed only when the release plan is approved (owner decision 13.10), see phases.ts
     }
 
     if ((f.sprint_id ?? null) !== (b.sprint_id ?? null)) changes.push({ field: 'sprint', old: curSprint?.code ?? null, new: sprint?.code ?? null });
@@ -303,6 +304,14 @@ export function registerCalendarRoutes(r: Router) {
     // vNext §1.2: an accepted proposal becomes «Запланировано» when one of its tasks gets a sprint
     if (b.sprint_id && b.sprint_id !== f.sprint_id) st.push(...(await autoPlanStatements(db, user, f.id)));
     await tx(db, st, 'Карточку изменил другой пользователь. Обновите данные.');
+    // entering an approved release (a confirmed change) makes the task agreed: capture its baseline once
+    if (b.sprint_id && isPlannable(f)) {
+      const rel = await first(db, 'SELECT r.id, r.approved_at FROM releases r JOIN release_features rf ON rf.release_id = r.id WHERE rf.feature_id = ?', f.id);
+      if (rel?.approved_at && !(await first(db, 'SELECT 1 FROM feature_plan_baselines WHERE feature_id = ?', f.id))) {
+        const fresh = await first(db, 'SELECT * FROM features WHERE id = ?', f.id);
+        await tx(db, (await baselineStatements(db, user, fresh!, 'Включена в утверждённый релиз', rel.id)).statements);
+      }
+    }
     return json({ ok: true, version: f.version + 1 });
   });
 }

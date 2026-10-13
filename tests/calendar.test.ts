@@ -111,10 +111,15 @@ describe('calendar API', () => {
     assert.equal(put1.status, 200, JSON.stringify(put1.body));
     let f = app.one('SELECT * FROM features WHERE id = ?', id);
     assert.equal(f.planned_production_date, '2026-10-29');
-    assert.equal(f.baseline_production_date, '2026-10-29');
+    assert.equal(f.baseline_production_date, null, 'not agreed yet: the baseline is fixed when the release plan is approved (vNext)');
     assert.equal(app.one('SELECT release_id FROM release_features WHERE feature_id = ?', id).release_id, s81.release_id);
+    const rel81 = app.one('SELECT version FROM releases WHERE id = ?', s81.release_id);
+    assert.equal((await app.call('POST', `/api/releases/${s81.release_id}/approve`, { version: rel81.version, approved: true }, pm)).status, 200);
+    f = app.one('SELECT * FROM features WHERE id = ?', id);
+    assert.equal(f.baseline_production_date, '2026-10-29');
     // move 8.1 → 8.2: new planned date, baseline kept, history written
-    assert.equal((await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s82.id, version: v() }, pm)).status, 200);
+    const mv = await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s82.id, version: v() }, pm);
+    assert.equal(mv.status, 200, JSON.stringify(mv.body));
     f = app.one('SELECT * FROM features WHERE id = ?', id);
     assert.equal(f.planned_production_date, '2026-11-12');
     assert.equal(f.baseline_production_date, '2026-10-29');
@@ -133,7 +138,10 @@ describe('calendar API', () => {
     // first delivery does not close the release: release summary counts both sprints
     const done = app.one("SELECT id FROM statuses WHERE entity = 'feature' AND semantic = 'done'").id;
     const other = (await app.call('POST', '/api/features', { title: 'Часть в 8.1', status_id: done }, pm)).body.id;
-    assert.equal((await app.call('PATCH', `/api/features/${other}/schedule`, { sprint_id: s81.id, version: 1 }, pm)).status, 200);
+    // the release is approved by now: adding a task needs an explicit confirmation and makes it agreed (baseline)
+    assert.equal((await app.call('PATCH', `/api/features/${other}/schedule`, { sprint_id: s81.id, version: 1 }, pm)).status, 409);
+    assert.equal((await app.call('PATCH', `/api/features/${other}/schedule`, { sprint_id: s81.id, version: 1, confirm_approved_change: true, reason: 'Уже сделано' }, pm)).status, 200);
+    assert.equal(app.one('SELECT COUNT(*) AS n FROM feature_plan_baselines WHERE feature_id = ?', other).n, 1);
     const rel = (await app.call('GET', `/api/releases/${s81.release_id}`, undefined, pm)).body.release;
     assert.deepEqual(rel.sprints.map((s: any) => [s.code, s.feature_count, s.done_count]), [['8.1', 1, 1], ['8.2', 1, 0]]);
     assert.equal(rel.readiness, 50);
@@ -186,6 +194,8 @@ describe('calendar API', () => {
     const s = app.one("SELECT * FROM sprints WHERE code = '8.2'");
     const id = (await app.call('POST', '/api/features', { title: 'Задача 8.2' }, pm)).body.id;
     await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: s.id, version: 1 }, pm);
+    const relv = app.one('SELECT version FROM releases WHERE id = ?', s.release_id).version;
+    await app.call('POST', `/api/releases/${s.release_id}/approve`, { version: relv, approved: true }, pm);
     assert.equal((await app.call('PATCH', `/api/sprints/${s.id}`, { production_due: '2026-11-13', version: s.version }, pm)).status, 400, 'reason required');
     assert.equal((await app.call('PATCH', `/api/sprints/${s.id}`, { start_date: '2026-10-15', version: s.version, reason: 'x' }, pm)).status, 400, 'overlap with 8.1');
     const ok = await app.call('PATCH', `/api/sprints/${s.id}`, { production_due: '2026-11-13', version: s.version, reason: 'Праздник' }, pm);

@@ -456,3 +456,6 @@ table.data td.c, table.data th.c { text-align: center; }
 
 /* analytics */
 .section-h { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+
+/* phases */
+table.data tr.current td { background: var(--beet-50, rgba(140, 30, 80, .05)); }

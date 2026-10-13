@@ -217,9 +217,12 @@ export async function budgetImpact(ctx: Ctx, featureId: string, sprintId: string
   const names = new Map(w.teams.map((t) => [t.id, t.name]));
   const caps = await all(ctx.env.DB, 'SELECT * FROM sprint_capacities WHERE sprint_id = ?', s.id);
   const load = sprintLoad(w, idx, s.id, task);
+  // only what THIS task adds can need a confirmation: a task without hours (or without cost in a month) never does,
+  // even when the sprint / month is already over its limit
+  const adds = (team: string) => (task.estimates[team] ?? 0) > 0;
   return [
-    ...report.flatMap((m: any) => (m.over_budget ? [{ month: m.month, kind: 'budget', limit: m.budget_limit_rub, value: m.cost }] : [])),
-    ...caps.filter((c) => (load[c.team_id] ?? 0) > Number(c.hours))
+    ...report.flatMap((m: any) => (m.over_budget && (m.tasks ?? []).some((t: any) => t.id === task.id && t.cost > 0) ? [{ month: m.month, kind: 'budget', limit: m.budget_limit_rub, value: m.cost }] : [])),
+    ...caps.filter((c) => adds(c.team_id) && (load[c.team_id] ?? 0) > Number(c.hours))
       .map((c) => ({ sprint: s.code, kind: 'capacity', team: names.get(c.team_id) ?? c.team_id, limit: Number(c.hours), value: load[c.team_id] })),
   ];
 }

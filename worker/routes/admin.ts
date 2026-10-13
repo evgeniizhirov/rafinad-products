@@ -68,8 +68,9 @@ const DICTS = {
   },
   stages: {
     table: 'stages',
-    create: z.object({ code, name: z.string().trim().min(1).max(120), sort_order: z.number().int().default(0) }),
-    patch: z.object({ name: z.string().trim().min(1).max(120).optional(), is_active: z.boolean().optional(), sort_order: z.number().int().optional(), version: z.number().int() }),
+    // phase on the Gantt (vNext §2.2): several stages may share one phase (Backend + Frontend = Разработка)
+    create: z.object({ code, name: z.string().trim().min(1).max(120), sort_order: z.number().int().default(0), phase: z.enum(['product', 'design', 'dev', 'qa', 'release']).nullable().optional() }),
+    patch: z.object({ name: z.string().trim().min(1).max(120).optional(), is_active: z.boolean().optional(), sort_order: z.number().int().optional(), phase: z.enum(['product', 'design', 'dev', 'qa', 'release']).nullable().optional(), version: z.number().int() }),
     timestamps: false,
   },
   periods: {

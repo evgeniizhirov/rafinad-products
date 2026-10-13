@@ -423,7 +423,7 @@ export function metaDto(w: World, viewer: Viewer) {
     teams: w.teams.map((t) => ({ id: t.id, code: t.code, name: t.name, color: t.color, is_active: bool(t.is_active), sort_order: t.sort_order, version: t.version })),
     categories: w.categories.map((c) => ({ id: c.id, name: c.name, color: c.color, is_active: bool(c.is_active), sort_order: c.sort_order, version: c.version })),
     statuses: w.statuses.map((s) => ({ id: s.id, entity: s.entity, code: s.code, name: s.name, semantic: s.semantic, color: s.color, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
-    stages: w.stages.map((s) => ({ id: s.id, code: s.code, name: s.name, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
+    stages: w.stages.map((s) => ({ id: s.id, code: s.code, name: s.name, phase: s.phase ?? null, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
     periods: w.periods.map((p) => ({ id: p.id, name: p.name, start_date: p.start_date, end_date: p.end_date, is_active: bool(p.is_active), version: p.version })),
     settings: {
       public_show_estimates: w.settings.public_show_estimates === '1',

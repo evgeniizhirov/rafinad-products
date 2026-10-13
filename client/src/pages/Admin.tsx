@@ -245,7 +245,7 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
   const [v, setV] = useState<Record<string, any>>({
     name: row?.name ?? '', code: row?.code ?? '', weight: row?.weight ?? 1, is_product: row?.is_product ?? false, color: row?.color ?? '#5b6b8c',
     entity: row?.entity ?? 'feature', semantic: row?.semantic ?? 'new', sort_order: row?.sort_order ?? 0, start_date: row?.start_date ?? '', end_date: row?.end_date ?? '',
-    is_active: row?.is_active ?? true,
+    is_active: row?.is_active ?? true, phase: row ? row.phase ?? '' : 'dev',
   });
   const dirty = useDirty(v);
   const set = (k: string, val: any) => setV((s) => ({ ...s, [k]: val }));
@@ -257,6 +257,7 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
     if (['teams', 'categories', 'statuses', 'stages'].includes(kind)) body.sort_order = Number(v.sort_order);
     if (kind === 'statuses' && !row) Object.assign(body, { entity: v.entity, semantic: v.semantic });
     if (kind === 'periods') Object.assign(body, { start_date: v.start_date, end_date: v.end_date });
+    if (kind === 'stages') body.phase = v.phase || null;
     if (row) body.is_active = v.is_active;
     const r = row ? await mutate(`/admin/dict/${kind}/${row.id}`, 'PATCH', { ...body, version: row.version }, 'Сохранено') : await mutate(`/admin/dict/${kind}`, 'POST', body, 'Добавлено');
     if (r) onClose();
@@ -285,6 +286,14 @@ function DictForm({ kind, row, onClose }: { kind: DictKind; row: any | null; onC
           </>
         )}
         {['teams', 'categories', 'statuses'].includes(kind) && <Field label="Цвет"><input className="input" type="color" value={v.color} onChange={(e) => set('color', e.target.value)} style={{ padding: 2 }} /></Field>}
+        {kind === 'stages' && (
+          <Field label="Этап на Ганте" hint="Несколько этапов могут относиться к одному этапу Ганта: Backend и Frontend — это «Разработка»">
+            <select className="select" value={v.phase} onChange={(e) => set('phase', e.target.value)}>
+              <option value="">Не показывать на Ганте</option>
+              <option value="product">Продукт</option><option value="design">Дизайн</option><option value="dev">Разработка</option><option value="qa">QA</option><option value="release">Релиз</option>
+            </select>
+          </Field>
+        )}
         {['departments', 'teams', 'categories', 'statuses', 'stages'].includes(kind) && <Field label="Порядок"><input className="input num" type="number" value={v.sort_order} onChange={(e) => set('sort_order', e.target.value)} /></Field>}
         {kind === 'periods' && (
           <>

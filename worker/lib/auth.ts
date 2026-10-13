@@ -65,9 +65,10 @@ export function scopeFor(method: string, path: string): ApiScope | null {
   if (method === 'POST' && path === '/api/proposals') return 'tasks:create';
   if (method === 'POST' && /^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
   if (method === 'PUT' && /^\/api\/features\/[^/]+\/votes\/[^/]+$/.test(path)) return 'priorities:write-own';
-  if (/^(PATCH|POST|PUT)$/.test(method) && /^\/api\/features\/[^/]+(\/(schedule|relations|comments|estimates|blockers|links))?$/.test(path)) return 'tasks:update';
+  if (/^(PATCH|POST|PUT)$/.test(method) && /^\/api\/features\/[^/]+(\/(schedule|relations|comments|estimates|blockers|links|phase|phase-forecast))?$/.test(path)) return 'tasks:update';
   if (method === 'PATCH' && /^\/api\/blockers\/[^/]+$/.test(path)) return 'tasks:update';
   if ((method === 'PATCH' || method === 'DELETE') && /^\/api\/links\/[^/]+$/.test(path)) return 'tasks:update';
+  if (method === 'PATCH' && /^\/api\/phase-events\/[^/]+$/.test(path)) return 'tasks:update';
   return null;
 }
 
