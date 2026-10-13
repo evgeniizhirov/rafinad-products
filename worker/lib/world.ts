@@ -52,6 +52,8 @@ export interface World {
   months: Row[];
   /** business blockers (FR-03): what we wait for, from whom, since when */
   blockers: Row[];
+  /** external links (vNext §3) — URLs only, shown to signed-in employees, never to guests */
+  links: Row[];
 }
 
 /**
@@ -67,6 +69,13 @@ export async function loadWorld(db: D1Database, viewer: Viewer | 'system', opts:
   return (viewer === 'editor' || viewer === 'system') && opts.includeInternal ? w : withoutProductInternal(w);
 }
 
+export function linkDto(l: Row) {
+  return {
+    id: l.id, kind: l.kind, url: l.url, title: l.title ?? null, origin: l.origin, source_id: l.source_id ?? null,
+    locally_edited: bool(l.locally_edited), updated_at: l.updated_at, version: l.version,
+  };
+}
+
 export function withoutProductInternal(w: World): World {
   const hidden = new Set(w.features.filter((f) => isProductInternal(f)).map((f) => f.id as string));
   if (!hidden.size) return w;
@@ -80,6 +89,7 @@ export function withoutProductInternal(w: World): World {
     relations: w.relations.filter((x) => keep(x.from_id) && keep(x.to_id)),
     releaseFeatures: w.releaseFeatures.filter((x) => keep(x.feature_id)),
     blockers: w.blockers.filter((x) => keep(x.feature_id)),
+    links: w.links.filter((x) => keep(x.feature_id)),
   };
 }
 
@@ -106,6 +116,7 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM sprints ORDER BY start_date, ordinal'),
     q('SELECT * FROM accounting_months ORDER BY month'),
     q('SELECT * FROM feature_blockers ORDER BY started_at, created_at'),
+    q('SELECT * FROM feature_links ORDER BY kind, created_at, id'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const settings: Record<string, string> = {};
@@ -113,7 +124,7 @@ async function loadAll(db: D1Database): Promise<World> {
   return {
     departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
     epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12),
-    relations: r(13), releases: r(14), releaseFeatures: r(15), users: r(16), sprints: r(17), months: r(18), blockers: r(19),
+    relations: r(13), releases: r(14), releaseFeatures: r(15), users: r(16), sprints: r(17), months: r(18), blockers: r(19), links: r(20),
   };
 }
 
@@ -131,6 +142,7 @@ export interface Indexes {
   period: Map<string, Row>;
   sprint: Map<string, Row>;
   openBlockersBy: Map<string, Row[]>;
+  linksBy: Map<string, Row[]>;
   estimatesBy: Map<string, Row[]>;
   votesBy: Map<string, Row[]>;
   tagsBy: Map<string, string[]>;
@@ -181,6 +193,7 @@ export function indexWorld(w: World): Indexes {
     period: new Map(w.periods.map((s) => [s.id, s])),
     sprint: new Map(w.sprints.map((s) => [s.id, s])),
     openBlockersBy: groupBy(w.blockers.filter((b) => !b.resolved_at), (b) => b.feature_id),
+    linksBy: groupBy(w.links, (l) => l.feature_id),
     estimatesBy: groupBy(w.estimates, (e) => e.feature_id),
     votesBy,
     tagsBy,
@@ -284,6 +297,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     dto.updated_at = f.updated_at;
     dto.estimate_manual = manual;
     dto.estimate_versions = estVersions;
+    dto.links = (idx.linksBy.get(f.id) ?? []).map(linkDto);
   }
   if (viewer === 'editor') dto.private_notes = opts.detail ? f.private_notes : undefined;
 

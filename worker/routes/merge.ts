@@ -77,6 +77,7 @@ export function registerMergeRoutes(r: Router) {
     const counts = {
       comments: (await all(db, 'SELECT COUNT(*) AS n FROM comments WHERE feature_id = ?', a.source.id))[0].n,
       sources: (await all(db, `SELECT COUNT(*) AS n FROM source_entity_links WHERE entity_type = 'feature' AND entity_id = ?`, a.source.id))[0].n,
+      links: (await all(db, 'SELECT COUNT(*) AS n FROM feature_links WHERE feature_id = ?', a.source.id))[0].n,
       relations_moved: a.newRelations.filter((x) => x.action === 'update').length,
       relations_dropped: a.newRelations.filter((x) => x.action === 'delete').length,
     };
@@ -136,6 +137,9 @@ export function registerMergeRoutes(r: Router) {
       else st.push(stmt(db, 'UPDATE feature_relations SET from_id = ?, to_id = ? WHERE id = ?', nr.from, nr.to, nr.rel.id));
     }
     // tags, comments, import sources, release membership
+    // external links: moved to the main card; a URL it already has is not duplicated
+    st.push(stmt(db, `UPDATE feature_links SET feature_id = ? WHERE feature_id = ? AND url NOT IN (SELECT url FROM feature_links WHERE feature_id = ?)`, T, S, T));
+    st.push(stmt(db, 'DELETE FROM feature_links WHERE feature_id = ?', S));
     st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) SELECT ?, tag FROM feature_tags WHERE feature_id = ?', T, S));
     st.push(stmt(db, 'UPDATE comments SET feature_id = ?, moved_from = COALESCE(moved_from, ?) WHERE feature_id = ?', T, S, S));
     st.push(stmt(db, `UPDATE source_entity_links SET entity_id = ?, updated_at = ? WHERE entity_type = 'feature' AND entity_id = ?`, T, now, S));

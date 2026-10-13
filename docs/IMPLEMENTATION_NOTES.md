@@ -404,3 +404,38 @@
 - `0012_drop_offers.sql`: `DROP TABLE feature_offers`, `DROP TABLE offers`, удаление статусов `entity = 'offer'`. На проде строк 0 (проверено 13.10).
 - Применять **после** выкладки v2-01: старый код читает эти таблицы в `loadWorld`, и без них прод упадёт. Порядок: merge v2-01 → деплой → миграция 0012 → merge v2-01b.
 - `statuses.entity` CHECK по-прежнему допускает `'offer'`. Пересоздавать таблицу ради ограничения не стали.
+
+## v2-03 — внешние ссылки задачи · ветка `claude/v2-03-links` (миграция 0013)
+
+**Модель** — таблица `feature_links`:
+- поля: `kind` (bitrix24 / jira / docs / other), `url`, `title`, `origin` (manual / import), `source_id`, `source_column`, `locally_edited`, `version`;
+- `UNIQUE(feature_id, url)` — один URL в задаче не повторяется, ссылок одного типа может быть несколько;
+- до 50 ссылок на задачу.
+
+**Без интеграций.** Сервер ни разу не запрашивает ссылку: нет API Jira, Bitrix24 или Confluence, нет OAuth и токенов. Чистые функции — в `worker/domain/links.ts`:
+- `checkUrl`: только абсолютный http(s) URL, без пробелов и управляющих символов, без логина и пароля, ≤ 2000 символов;
+- `guessKind`: определяет тип по адресу; Bitrix24 на своём домене узнаётся по пути `/workgroups/…/tasks/`;
+- `extractUrls`: достаёт URL из текста без хвостовой пунктуации и дублей; пригодится в PR v2-04.
+
+**API** (`worker/routes/links.ts`):
+
+| Маршрут | Доступ |
+| --- | --- |
+| `GET /api/features/:id/links` | вошедший сотрудник; гость — 401 |
+| `POST /api/features/:id/links {url, kind?, title?}` | product/admin; API-ключ со scope `tasks:update` |
+| `PATCH /api/links/:id {url?, kind?, title?, version}` | product/admin; `tasks:update` |
+| `DELETE /api/links/:id` | product/admin; `tasks:update` |
+
+- Повторный URL → 409 `duplicate_link`; неверный адрес → 400 с понятным текстом.
+- В DTO задачи `links[]` есть только для вошедших. Гость ссылок не видит даже у публичной задачи: ссылки ведут во внутренние системы.
+- Скрытая задача Product: её ссылки для остальных — 404, как и сама карточка.
+- Ручное изменение ссылки, созданной импортом, ставит `locally_edited = 1`. Импорт (PR v2-04) её не перезапишет, а покажет конфликт.
+- Аудит пишется на задачу (`link_added` / `link_changed` / `link_removed`), поэтому виден в её «Истории».
+- При слиянии дублей ссылки переходят в основную карточку без повторов URL.
+
+**UI:** блок «Внешние ссылки» во вкладке «Описание»:
+- группы по типам; ссылки открываются в новой вкладке (`noopener noreferrer`);
+- у ссылки без названия показывается ключ Jira или короткий путь;
+- добавление, изменение и удаление — для product/admin.
+
+**Тесты:** `tests/links.test.ts`.

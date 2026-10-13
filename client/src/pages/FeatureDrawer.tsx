@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
+import { ExternalLinks } from './ExternalLinks';
 import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
@@ -147,6 +148,7 @@ function About({ f }: { f: any }) {
         {f.external_ref && (<><dt>Внешний ID</dt><dd>{f.external_ref}</dd></>)}
         {f.sources?.length > 0 && (<><dt>Источники импорта</dt><dd>{f.sources.map((s: any) => <div key={s.source_id + s.external_id}>{s.source_name}: {s.external_id}</div>)}</dd></>)}
       </dl>
+      {f.links !== undefined && <ExternalLinks f={f} canEdit={canEditCard} />}
       {f.private_notes && (
         <div className="notice warn"><I.lock /><div><b>Приватная заметка.</b> <span className="pre">{f.private_notes}</span></div></div>
       )}
@@ -560,7 +562,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
               ))}
             </section>
           )}
-          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
+          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), внешние ссылки ({p.counts.links ?? 0}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
           <button className="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => setTarget(null)}>Выбрать другую карточку</button>
         </div>
       )}
@@ -571,6 +573,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
 const ACTIONS: Record<string, string> = {
   created: 'создал(а) карточку', updated: 'изменил(а)', estimates_changed: 'изменил(а) оценки', vote: 'проголосовал(а)', vote_admin_override: 'изменил(а) оценку отдела (админ)',
   moved: 'перенёс(ла) в другой период', moved_over_capacity: 'перенёс(ла) с превышением лимита', plan_approved: 'утвердил(а) размещение по плану',
+  link_added: 'добавил(а) внешнюю ссылку', link_changed: 'изменил(а) внешнюю ссылку', link_removed: 'удалил(а) внешнюю ссылку',
   relation_added: 'добавил(а) связь', relation_removed: 'удалил(а) связь', comment_added: 'оставил(а) комментарий', merged_into: 'объединил(а) с другой карточкой',
   merged_from: 'присоединил(а) дубль', import_created: 'создано импортом', import_updated: 'обновлено импортом', import_linked: 'привязан источник импорта', import_relation: 'связь из импорта',
 };

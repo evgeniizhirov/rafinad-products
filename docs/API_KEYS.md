@@ -24,7 +24,7 @@
 | --- | --- |
 | `tasks:read` | `GET` задач, обзора, приоритетов, релизов, эпиков, офферов, календаря, спринтов, роадмапа |
 | `tasks:create` | `POST /api/features` (только если роль product/admin) |
-| `tasks:update` | `PATCH /api/features/:id`, расписание, связи, комментарии, оценки, блокеры |
+| `tasks:update` | `PATCH /api/features/:id`, расписание, связи, комментарии, оценки, блокеры, внешние ссылки (`POST /api/features/:id/links`, `PATCH`/`DELETE /api/links/:id`) |
 | `priorities:write-own` | оценка задачи за **свои** отделы (`PUT /api/features/:id/votes/:departmentId`) |
 | `exports:read` | выгрузка задач (появится в P08) |
 
