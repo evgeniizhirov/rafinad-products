@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import { AuthError, classify, maxTokenAge } from './auth-policy';
+import type { Fetch } from './roadmap';
 
 export interface Env {
   MCP_RESOURCE: string;
@@ -8,6 +9,8 @@ export interface Env {
   OAUTH_CLIENT_ID: string;
   OWNER_SUBJECT: string;
   RAFINAD_API_KEY: string;
+  /** Service binding to the production Roadmap Worker, not a public network fetch. */
+  ROADMAP_API: { fetch: Fetch };
   ENABLE_WRITES?: string;
   /** optional, 300..86400; default 86400 (Auth0 custom API default access-token lifetime) */
   OAUTH_MAX_TOKEN_AGE_SECONDS?: string;
@@ -25,6 +28,7 @@ export function validateConfig(env: Env) {
   }
   if (new URL(env.MCP_RESOURCE).pathname !== '/mcp') throw new Error('Resource must end in /mcp');
   maxTokenAge(env.OAUTH_MAX_TOKEN_AGE_SECONDS);
+  if (!env.ROADMAP_API || typeof env.ROADMAP_API.fetch !== 'function') throw new Error('Roadmap service binding not configured');
 }
 
 const keySets = new Map<string, JWTVerifyGetKey>();
