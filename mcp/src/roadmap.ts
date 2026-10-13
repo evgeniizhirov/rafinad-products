@@ -13,7 +13,7 @@ const messages: Record<number, string> = {
 const safeCodes = new Set(['version_conflict', 'over_budget', 'approved', 'merged', 'confirm_disclose', 'invalid_api_key', 'rate_limited']);
 
 export class Roadmap {
-  constructor(private key: string, private fetcher: Fetch = fetch) {}
+  constructor(private key: string, private fetcher: Fetch) {}
   // Paths are constructed only by this adapter's callers; never accept a URL from a tool.
   async request(path: string, method = 'GET', body?: unknown): Promise<any> {
     if (!path.startsWith('/') || path.startsWith('//') || /[\\#]/.test(path)) throw new Error('Invalid API path');
