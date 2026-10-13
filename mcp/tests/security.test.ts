@@ -26,7 +26,7 @@ test('discovery, missing configuration, host and origin protection', async () =>
 });
 
 test('MCP initialize and real tools/list; read-only switch AND OAuth scope hide all writes', async () => {
-  for (const [settings, claims, count] of [[{}, {}, 14], [{ ENABLE_WRITES: 'false' }, {}, 9], [{}, { scope: 'roadmap:read' }, 9]] as const) {
+  for (const [settings, claims, count] of [[{}, {}, 14], [{ ENABLE_WRITES: 'false' }, {}, 9], [{}, { scope: 'roadmap:read' }, 14]] as const) {
     const h = await harness(async () => Response.json({}), settings, claims);
     const init = await h.rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'tests', version: '1' } });
     assert.equal(init.result.serverInfo.name, 'rafinad-roadmap');
@@ -39,19 +39,46 @@ test('MCP initialize and real tools/list; read-only switch AND OAuth scope hide 
 
 test('OAuth write scope and ENABLE_WRITES must both be present; unconfirmed writes never reach Roadmap', async () => {
   const writeTools = ['create_task', 'update_task', 'set_task_priority', 'add_task_comment', 'schedule_task'];
-  for (const [config, claims, enabled] of [
-    [{ ENABLE_WRITES: 'false' }, { scope: 'roadmap:read roadmap:write' }, false],
-    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read' }, false],
-    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read roadmap:write' }, true],
+  for (const [config, claims, visible, authorized] of [
+    [{ ENABLE_WRITES: 'false' }, { scope: 'roadmap:read roadmap:write' }, false, false],
+    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read' }, true, false],
+    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read roadmap:write' }, true, true],
   ] as const) {
     let apiCalls = 0;
     const h = await harness(async () => { apiCalls++; return Response.json({}); }, config, claims);
     const result = await h.rpc('tools/list');
     const names = result.result.tools.map((tool: { name: string }) => tool.name);
-    for (const name of writeTools) assert.equal(names.includes(name), enabled, name);
+    for (const name of writeTools) assert.equal(names.includes(name), visible, name);
     const create = await h.call('create_task', { fields: { title: 'must not create' } });
     assert.equal(create.isError, true, 'missing explicit confirmation always refuses create');
     assert.equal(apiCalls, 0, 'no request reaches Roadmap without confirmed=true');
+    if (visible && !authorized) {
+      const forbidden = await h.call('create_task', { fields: { title: 'must not create' }, confirmed: true });
+      assert.equal(forbidden.isError, true);
+      assert.equal(forbidden.value.status, 403);
+      assert.equal(forbidden.value.code, 'missing_write_scope');
+      assert.equal(apiCalls, 0, 'OAuth read-only tokens may never perform writes');
+    }
+  }
+});
+
+test('authenticated profile reports write authorization without exposing JWT or API secrets', async () => {
+  for (const [serverWrites, oauthScope, canWrite] of [
+    ['false', 'roadmap:read roadmap:write', false],
+    ['true', 'roadmap:read', false],
+    ['true', 'roadmap:read roadmap:write', true],
+  ] as const) {
+    const h = await harness(async () => Response.json({ user: { role: 'admin' } }),
+      { ENABLE_WRITES: serverWrites }, { scope: oauthScope });
+    const profile = await h.call('get_my_profile');
+    assert.equal(profile.isError, undefined);
+    assert.deepEqual(profile.value.mcp_access, {
+      writes_enabled: serverWrites === 'true',
+      token_has_write_scope: oauthScope.includes('roadmap:write'),
+      can_write: canWrite,
+    });
+    assert.deepEqual(profile.value.user, { role: 'admin' });
+    assert.ok(!JSON.stringify(profile.value).includes(env.RAFINAD_API_KEY));
   }
 });
 
