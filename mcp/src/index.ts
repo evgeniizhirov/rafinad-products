@@ -64,7 +64,10 @@ export async function handle(request: Request, env: Env, deps: { keys?: JWTVerif
     return withCors(json({ error: 'unauthorized' }, 401, { 'www-authenticate': challenge(env, reason !== 'missing_token') }), origin);
   }
   try {
-    const api = new Roadmap(env.RAFINAD_API_KEY, deps.fetcher);
+    // Service binding avoids disallowed Worker-to-Worker fetches over workers.dev.
+    // Tests may inject a stub fetcher, but production never falls back to global fetch.
+    const fetcher = deps.fetcher ?? ((input: RequestInfo | URL, init?: RequestInit) => env.ROADMAP_API.fetch(input, init));
+    const api = new Roadmap(env.RAFINAD_API_KEY, fetcher);
     const handler = createMcpHandler(() => createServer(api, auth.canWrite));
     const response = await handler.fetch(request);
     const headers = new Headers(response.headers);
