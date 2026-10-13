@@ -37,6 +37,24 @@ test('MCP initialize and real tools/list; read-only switch AND OAuth scope hide 
   }
 });
 
+test('OAuth write scope and ENABLE_WRITES must both be present; unconfirmed writes never reach Roadmap', async () => {
+  const writeTools = ['create_task', 'update_task', 'set_task_priority', 'add_task_comment', 'schedule_task'];
+  for (const [config, claims, enabled] of [
+    [{ ENABLE_WRITES: 'false' }, { scope: 'roadmap:read roadmap:write' }, false],
+    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read' }, false],
+    [{ ENABLE_WRITES: 'true' }, { scope: 'roadmap:read roadmap:write' }, true],
+  ] as const) {
+    let apiCalls = 0;
+    const h = await harness(async () => { apiCalls++; return Response.json({}); }, config, claims);
+    const result = await h.rpc('tools/list');
+    const names = result.result.tools.map((tool: { name: string }) => tool.name);
+    for (const name of writeTools) assert.equal(names.includes(name), enabled, name);
+    const create = await h.call('create_task', { fields: { title: 'must not create' } });
+    assert.equal(create.isError, true, 'missing explicit confirmation always refuses create');
+    assert.equal(apiCalls, 0, 'no request reaches Roadmap without confirmed=true');
+  }
+});
+
 test('unknown fields, URL IDs and missing confirmation never reach REST', async () => {
   let calls = 0;
   const h = await harness(async () => { calls++; return Response.json({}); });
