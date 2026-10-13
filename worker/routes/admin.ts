@@ -267,6 +267,7 @@ export function registerAdminRoutes(r: Router) {
       calendar_months_ahead: z.number().int().min(1).max(36).optional(),
       // FR-08: the only spreadsheet the export may write to (its «Import» tab), and who may write there
       export_google_spreadsheet_id: z.string().trim().max(300).transform((v) => (v ? parseSpreadsheetId(v) ?? '#invalid' : '')).refine((v) => v !== '#invalid', 'Укажите ссылку на Google-таблицу или её ID').optional(),
+      budget_allocation: z.enum(['workdays', 'calendar_days']).optional(),
       export_google_roles: z.array(z.enum(['department_lead', 'product', 'admin'])).min(1).transform((v) => v.join(',')).optional(),
     }));
     const db = ctx.env.DB;

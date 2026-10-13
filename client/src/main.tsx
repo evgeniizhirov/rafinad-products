@@ -12,6 +12,7 @@ import { Overview } from './pages/Overview';
 import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
 import { Calendar } from './pages/Calendar';
+import { Budget } from './pages/Budget';
 import { Roadmap } from './pages/Roadmap';
 import { Sync } from './pages/Sync';
 import { Avatar, Empty, Loading, Toasts } from './ui';
@@ -34,6 +35,7 @@ const NAV = [
   { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
   { to: '/calendar', label: 'Спринты', icon: I.calendar },
+  { to: '/budget', label: 'Бюджет', icon: I.priorities, plan: true },
 ];
 
 function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNavigate: () => void }) {
@@ -46,7 +48,7 @@ function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNav
         <div className="brand-name">Rafinad<small>Продуктовый роадмап</small></div>
       </div>
       <div className="nav">
-        {NAV.map((n) => (
+        {NAV.filter((n) => !(n as { plan?: boolean }).plan || me?.permissions.plan).map((n) => (
           <Link key={n.to} to={n.to} className={active(n.to) ? 'active' : ''} onClick={onNavigate}>
             <n.icon />{n.label}
           </Link>
@@ -89,6 +91,7 @@ function Routes() {
     case 'roadmap': return <Roadmap />;
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;
     case 'calendar': return <Calendar />;
+    case 'budget': return <Budget />;
     case 'sync': return <Sync />;
     case 'admin': return <Admin />;
     case 'account': return <Account />;

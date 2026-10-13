@@ -327,7 +327,7 @@ function ScheduleSection({ f, canEdit }: { f: any; canEdit: boolean }) {
       invalidate();
       toast('План задачи обновлён');
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'approved') setPending(body);
+      if (e instanceof ApiError && (e.code === 'approved' || e.code === 'over_budget')) setPending({ ...body, __code: e.code, __over: e.details?.over ?? [] });
       else { toast((e as Error).message, 'error'); invalidate(); }
     }
   };
@@ -360,8 +360,21 @@ function ScheduleSection({ f, canEdit }: { f: any; canEdit: boolean }) {
       </div>
       {planned && sprint && <div className="small muted">Разработка {fmtDate(sprint.start_date, false)} — {fmtDate(sprint.end_date)}, тестирование с {fmtDate(sprint.testing_start)}, выкладка до {fmtDate(sprint.production_due)}.</div>}
       {pending && (
-        <ReasonModal title="Релиз утверждён" confirmText="Изменить состав" onClose={() => setPending(null)} onConfirm={async (reason) => { const p = pending; setPending(null); await send({ ...p, confirm_approved_change: true, reason }); }}>
-          <p>Задача меняет состав утверждённого релиза. Укажите причину — она попадёт в журнал.</p>
+        <ReasonModal
+          title={pending.__code === 'over_budget' ? 'Превышение бюджета или ёмкости' : 'Релиз утверждён'}
+          confirmText={pending.__code === 'over_budget' ? 'Включить с превышением' : 'Изменить состав'}
+          onClose={() => setPending(null)}
+          onConfirm={async (reason) => {
+            const { __code, __over, ...p } = pending;
+            setPending(null);
+            await send({ ...p, reason, ...(__code === 'over_budget' ? { confirm_over_budget: true } : { confirm_approved_change: true }) });
+          }}
+        >
+          {pending.__code === 'over_budget' ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {pending.__over.map((o: any, i: number) => <li key={i}>{o.month}: {o.kind === 'budget' ? `бюджет ${Math.round(o.value).toLocaleString('ru-RU')} ₽ при лимите ${Math.round(o.limit).toLocaleString('ru-RU')} ₽` : `${o.team}: ${o.value} ч при доступных ${o.limit} ч`}</li>)}
+            </ul>
+          ) : <p>Задача меняет состав утверждённого релиза. Укажите причину — она попадёт в журнал.</p>}
         </ReasonModal>
       )}
     </section>

@@ -4,6 +4,7 @@ import { errorResponse, forbidden, HttpError, json, Router, type Ctx } from './l
 import { registerAdminRoutes } from './routes/admin';
 import { registerApiKeyRoutes } from './routes/apikeys';
 import { registerAuthRoutes } from './routes/auth';
+import { registerBudgetRoutes } from './routes/budget';
 import { registerCalendarRoutes } from './routes/calendar';
 import { registerCatalogRoutes } from './routes/catalog';
 import { registerDashboardRoutes } from './routes/dashboard';
@@ -24,6 +25,7 @@ registerPriorityRoutes(router);
 registerCatalogRoutes(router);
 registerReleaseRoutes(router);
 registerCalendarRoutes(router);
+registerBudgetRoutes(router);
 registerPlanningRoutes(router);
 registerImportRoutes(router);
 registerAdminRoutes(router);
