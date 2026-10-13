@@ -8,14 +8,16 @@
 // unless the user explicitly ticks them.
 
 import { flatToCanonical, type FlatConfig } from './flatSheet';
+import { decodeLinks, emptyPlan, planHasChanges, planLinks, type ExistingLink, type LinkChoice } from './linkImport';
 import { findCycle, type Edge } from './graph';
 import { normalizeTitle, parseDate, parseHours, sanitizeCell, similarity } from './text';
 
-export type SheetKey = 'epics' | 'features' | 'offers' | 'relations';
-export const SHEET_KEYS: SheetKey[] = ['epics', 'offers', 'features', 'relations'];
+// «Офферы» removed in vNext (owner decision 13.10): an «Offers» sheet in an old template is ignored.
+export type SheetKey = 'epics' | 'features' | 'relations';
+export const SHEET_KEYS: SheetKey[] = ['epics', 'features', 'relations'];
 
 export interface ImportConfig {
-  /** 'template' — four sheets Epics/Features/Offers/Relations; 'flat' — one sheet of tasks with a column mapping */
+  /** 'template' — sheets Epics/Features/Relations; 'flat' — one sheet of tasks with a column mapping */
   format?: 'template' | 'flat';
   sheets: Record<SheetKey, string>;
   /** extra column header → resource team code (in addition to automatic `<code>_hours`) */
@@ -26,7 +28,7 @@ export interface ImportConfig {
 }
 
 export const DEFAULT_IMPORT_CONFIG: ImportConfig = {
-  sheets: { epics: 'Epics', features: 'Features', offers: 'Offers', relations: 'Relations' },
+  sheets: { epics: 'Epics', features: 'Features', relations: 'Relations' },
   hoursColumns: {},
 };
 
@@ -36,14 +38,17 @@ export const SHEET_COLUMNS: Record<SheetKey, { required: string[]; optional: str
     required: ['external_id', 'title'],
     optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'assignee', 'planned_end', 'closed_at', 'tags', 'visibility',
       // bugs / operational improvements (P05); task_kind, initiator and author are applied on creation only
-      'task_kind', 'urgency', 'fact_hours', 'initiator', 'author'],
+      'task_kind', 'urgency', 'fact_hours', 'initiator', 'author',
+      // external links (vNext §3): one per line, «https://…» or «jira https://…»
+      'links'],
   },
-  offers: { required: ['external_id', 'name'], optional: ['description', 'category', 'status', 'visibility'] },
   relations: { required: ['from_type', 'from_external_id', 'relation_type', 'to_type', 'to_external_id'], optional: [] },
 };
 
 /** raw sheets as read from the source; `flat` holds the single sheet of the 'flat' format */
 export type SheetsData = Partial<Record<SheetKey | 'flat', string[][]>>;
+/** URLs hidden behind cell text (Google Sheets metadata), same grid as the sheet, newline-separated per cell */
+export type SheetHyperlinks = Partial<Record<SheetKey | 'flat', string[][]>>;
 
 /** names of the sheets to read for a config */
 export function sourceSheetNames(config: ImportConfig): { key: SheetKey | 'flat'; name: string }[] {
@@ -54,11 +59,11 @@ export function sourceSheetNames(config: ImportConfig): { key: SheetKey | 'flat'
 export interface SnapshotEntity {
   id: string;
   number?: number;
-  title: string; // offers: name
+  title: string;
   description: string;
   category_id: string | null;
   status_id: string;
-  external_ref: string | null; // offers: external_code
+  external_ref: string | null;
   version: number;
   merged_into_id?: string | null;
   epic_id?: string | null;
@@ -80,15 +85,20 @@ export interface Snapshot {
   links: { entity_type: string; external_id: string; entity_id: string; last_values: Record<string, unknown> | null }[];
   epics: SnapshotEntity[];
   features: SnapshotEntity[];
-  offers: SnapshotEntity[];
   relations: { type: string; from_id: string; to_id: string }[];
-  featureOffers: { feature_id: string; offer_id: string }[];
   /** for the initiator column: an exact name match becomes a link to a department / user */
   departments?: { id: string; name: string }[];
+  /** external links of every card and the id of the source being imported (link ownership) */
+  featureLinks?: ExistingLink[];
+  sourceId?: string;
   users?: { id: string; name: string }[];
+  /** rows of this source whose record an administrator deleted for good (vNext ТЗ §5): never re-created silently */
+  tombstones?: { entity_type: string; external_id: string; entity_key: string; deleted_at: string }[];
+  /** numbers of deleted records are never reused (vNext ТЗ §5) */
+  numberFloors?: { features: number; epics: number };
 }
 
-export type EntityType = 'epic' | 'feature' | 'offer' | 'relation' | 'sheet';
+export type EntityType = 'epic' | 'feature' | 'relation' | 'sheet';
 export type Action = 'create' | 'update' | 'unchanged' | 'duplicate' | 'error';
 
 export interface DiffEntry {
@@ -116,6 +126,8 @@ export interface Resolution {
   fields?: Record<string, 'source' | 'local'>;
   /** protected field → explicitly confirmed overwrite */
   protected?: Record<string, boolean>;
+  /** external links: conflicts where the source wins, links «нет в источнике» to delete */
+  links?: LinkChoice;
 }
 
 export interface ItemDraft {
@@ -135,10 +147,9 @@ export interface ItemDraft {
   resolution: Resolution | null;
 }
 
-const ENTITY_OF: Record<Exclude<SheetKey, 'relations'>, 'epic' | 'feature' | 'offer'> = {
+const ENTITY_OF: Record<Exclude<SheetKey, 'relations'>, 'epic' | 'feature'> = {
   epics: 'epic',
   features: 'feature',
-  offers: 'offer',
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -174,7 +185,7 @@ export function initiatorOf(raw: string, snap: Snapshot): { type: 'free_text' | 
 }
 const KINDS = ['planned', 'bug', 'operational_improvement'];
 
-export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'affects_offer', 'belongs_to_epic'] as const;
+export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'belongs_to_epic'] as const;
 
 const SIMILARITY_THRESHOLD = 0.55;
 
@@ -214,7 +225,7 @@ export interface Lookup {
   stageName: Map<string, string>;
   linkOf: Map<string, { entity_id: string; last_values: Record<string, unknown> | null }>;
   extOfEntity: Map<string, string>; // `${type}|${entityId}` → external id (this source)
-  entities: Record<'epic' | 'feature' | 'offer', Map<string, SnapshotEntity>>;
+  entities: Record<'epic' | 'feature', Map<string, SnapshotEntity>>;
 }
 
 export function buildLookup(s: Snapshot): Lookup {
@@ -244,7 +255,6 @@ export function buildLookup(s: Snapshot): Lookup {
     entities: {
       epic: new Map(s.epics.map((e) => [e.id, e])),
       feature: new Map(s.features.map((e) => [e.id, e])),
-      offer: new Map(s.offers.map((e) => [e.id, e])),
     },
   };
 }
@@ -257,8 +267,9 @@ export function resolveMerged(map: Map<string, SnapshotEntity>, id: string): Sna
   return e;
 }
 
-export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string } = {}): ItemDraft[] {
+export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: Snapshot, opts: { today?: string; hyperlinks?: SheetHyperlinks } = {}): ItemDraft[] {
   const L = buildLookup(snap);
+  const tombs = new Map((snap.tombstones ?? []).map((t) => [`${t.entity_type}|${lc(t.external_id)}`, t]));
   const items: ItemDraft[] = [];
   let seq = 0;
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
@@ -272,7 +283,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
     sheets = {};
     const raw = rawSheets.flat;
     if (raw && raw.length) {
-      const conv = flatToCanonical(raw, config.flat, snap.teams.map((t) => t.code.toLowerCase()), today);
+      const conv = flatToCanonical(raw, config.flat, snap.teams.map((t) => t.code.toLowerCase()), today, opts.hyperlinks?.flat);
       if (conv.missing.includes(config.flat.columns.title)) {
         items.push({
           seq: seq++, sheet: config.flat.sheet, rowNumber: 1, entityType: 'sheet', externalId: null, action: 'error', targetId: null, targetVersion: null,
@@ -297,7 +308,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
   const teamName = new Map(snap.teams.map((t) => [t.id, t.name]));
 
   // external ids present in this import (per entity type) → item, used by Relations and epic links
-  const inRun: Record<'epic' | 'feature' | 'offer', Map<string, ItemDraft>> = { epic: new Map(), feature: new Map(), offer: new Map() };
+  const inRun: Record<'epic' | 'feature', Map<string, ItemDraft>> = { epic: new Map(), feature: new Map() };
 
   // flat sheets often list the same task twice (assigned block + general list): flag, never merge silently
   const flatTitles = new Map<string, { row: number; assignee: string }>();
@@ -341,7 +352,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       const errors: string[] = [];
       const warnings: string[] = [];
       const externalId = cell(row, 'external_id', 200);
-      const titleCol = key === 'offers' ? 'name' : 'title';
+      const titleCol = 'title';
       const title = cell(row, titleCol, 2000);
       if (!externalId) errors.push('Не заполнен обязательный столбец external_id');
       if (!title) errors.push(`Не заполнен обязательный столбец ${titleCol}`);
@@ -441,6 +452,13 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
           else if (h.value !== null) estimates[teamId] = h.value;
         }
         payload.estimates = estimates;
+        if (has('links')) {
+          // absent column = links untouched; a present (even empty) column = this source's links of the task
+          const dl = decodeLinks(cell(row, 'links', 50000));
+          payload.links = dl.links;
+          // flat sheets report bad cells while converting (with the real column name); a template reports them here
+          if (!flatDerived) warnings.push(...dl.problems);
+        }
       }
 
       const base = {
@@ -452,6 +470,16 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (errors.length) {
         const it = push({ ...base, action: 'error', resolution: null });
         if (externalId && !inRun[entityType].has(lc(externalId))) inRun[entityType].set(lc(externalId), it);
+        continue;
+      }
+
+      // 0. deleted for good by an administrator: skipped unless the import is consciously restored («Создать»)
+      const tomb = tombs.get(`${entityType}|${lc(externalId)}`);
+      if (tomb) {
+        payload.tombstone = { key: tomb.entity_key, deleted_at: tomb.deleted_at };
+        warnings.push(`Запись ${tomb.entity_key} удалена администратором ${tomb.deleted_at.slice(8, 10)}.${tomb.deleted_at.slice(5, 7)}.${tomb.deleted_at.slice(0, 4)} — строка пропускается. «Восстановить импорт» создаст её заново.`);
+        const it = push({ ...base, action: 'create', resolution: { mode: 'skip' } });
+        inRun[entityType].set(lc(externalId), it);
         continue;
       }
 
@@ -484,7 +512,8 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (target) {
         if (matchNote) warnings.push(matchNote);
         const diff = diffEntity(entityType, target, payload, lastValues, L, teamName, { statusFollowsSource: config.format === 'flat' });
-        const action: Action = diff.length ? 'update' : 'unchanged';
+        if (entityType === 'feature' && payload.links) payload.link_plan = linkPlanFor(snap, target.id, payload.links);
+        const action: Action = diff.length || planHasChanges(payload.link_plan) ? 'update' : 'unchanged';
         const fields: Record<string, 'source' | 'local'> = {};
         for (const d of diff) if (d.kind === 'update') fields[d.field] = 'source';
         const it = push({
@@ -515,6 +544,7 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
       if (visibilityRaw === 'public' || visibilityRaw === 'публичная') {
         warnings.push('Новая карточка попадёт в черновики; опубликуйте её после проверки');
       }
+      if (entityType === 'feature' && payload.links?.length) payload.link_plan = { ...emptyPlan(), add: payload.links };
       const it = push({ ...base, action: 'create', resolution: { mode: 'create' } });
       inRun[entityType].set(lc(externalId), it);
     }
@@ -535,6 +565,11 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
     }
   }
   return items;
+}
+
+/** what an import of these source links would do to a card (also recomputed at apply time on fresh data) */
+export function linkPlanFor(snap: Snapshot, featureId: string, links: { kind: any; url: string; column: string }[]) {
+  return planLinks(links, (snap.featureLinks ?? []).filter((l) => l.feature_id === featureId), snap.sourceId ?? '');
 }
 
 function entityLabel(type: string, e: SnapshotEntity) {
@@ -610,7 +645,7 @@ const eqField = (f: string, a: unknown, b: unknown) =>
   f === 'epic' && typeof a === 'string' && typeof b === 'string' ? lc(a) === lc(b) : eq(a, b);
 
 function diffEntity(
-  type: 'epic' | 'feature' | 'offer',
+  type: 'epic' | 'feature',
   target: SnapshotEntity,
   payload: Record<string, any>,
   last: Record<string, unknown> | null,
@@ -691,7 +726,7 @@ function relationItem(
   row: string[],
   cell: (row: string[], col: string, max?: number) => string,
   L: Lookup,
-  inRun: Record<'epic' | 'feature' | 'offer', Map<string, ItemDraft>>,
+  inRun: Record<'epic' | 'feature', Map<string, ItemDraft>>,
   snap: Snapshot,
 ): ItemDraft {
   const errors: string[] = [];
@@ -705,6 +740,10 @@ function relationItem(
     seq, sheet, rowNumber, entityType: 'relation', externalId: `${fromExt} ${relType} ${toExt}`, action: 'error', targetId: null, targetVersion: null,
     candidates: [], payload, diff: [], errors, warnings: [], resolution: null,
   };
+  if (relType === 'affects_offer') {
+    errors.push('Связь с оффером больше не поддерживается: раздел «Офферы» удалён');
+    return base;
+  }
   if (!(RELATION_TYPES as readonly string[]).includes(relType)) {
     errors.push(`Неизвестный тип связи «${relType}». Допустимо: ${RELATION_TYPES.join(', ')}`);
     return base;
@@ -713,7 +752,6 @@ function relationItem(
     blocks: ['feature', 'feature'],
     related_to: ['feature', 'feature'],
     duplicate_of: ['feature', 'feature'],
-    affects_offer: ['feature', 'offer'],
     belongs_to_epic: ['feature', 'epic'],
   };
   const [ef, et] = expected[relType];
@@ -722,7 +760,7 @@ function relationItem(
     return base;
   }
   // resolve endpoints → existing entity id or "ext:<type>:<id>" for entities created in this run
-  const resolve = (type: 'feature' | 'offer' | 'epic', ext: string): string | null => {
+  const resolve = (type: 'feature' | 'epic', ext: string): string | null => {
     if (!ext) return null;
     const run = inRun[type].get(lc(ext));
     if (run) {
@@ -736,7 +774,7 @@ function relationItem(
     return null;
   };
   const fromKey = resolve(ef as 'feature', fromExt);
-  const toKey = resolve(et as 'feature' | 'offer' | 'epic', toExt);
+  const toKey = resolve(et as 'feature' | 'epic', toExt);
   if (!fromKey) errors.push(`Ссылка на отсутствующую сущность ${ef} «${fromExt}»`);
   if (!toKey) errors.push(`Ссылка на отсутствующую сущность ${et} «${toExt}»`);
   if (errors.length) return base;
@@ -750,8 +788,7 @@ function relationItem(
   // already present?
   let exists = false;
   if (!fromKey!.startsWith('ext:') && !toKey!.startsWith('ext:')) {
-    if (relType === 'affects_offer') exists = snap.featureOffers.some((x) => x.feature_id === fromKey && x.offer_id === toKey);
-    else if (relType === 'belongs_to_epic') exists = L.entities.feature.get(fromKey!)?.epic_id === toKey;
+    if (relType === 'belongs_to_epic') exists = L.entities.feature.get(fromKey!)?.epic_id === toKey;
     else if (relType === 'related_to')
       exists = snap.relations.some((r) => r.type === 'related_to' && ((r.from_id === fromKey && r.to_id === toKey) || (r.from_id === toKey && r.to_id === fromKey)));
     else exists = snap.relations.some((r) => r.type === relType && r.from_id === fromKey && r.to_id === toKey);

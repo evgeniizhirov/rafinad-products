@@ -7,10 +7,9 @@ const SECRET = 'Секретная проработка тарифов';
 
 async function hiddenTask(app: TestApp, pm: string) {
   const epic = app.one('SELECT id FROM epics ORDER BY number LIMIT 1').id;
-  const offer = app.one('SELECT id FROM offers ORDER BY name LIMIT 1').id;
   const r = await app.call('POST', '/api/features', {
     title: SECRET, description: 'не для отделов', visibility: 'public', is_product_internal: true,
-    epic_id: epic, offer_ids: [offer], tags: ['тайна'], estimates: { team_backend: 40 },
+    epic_id: epic, tags: ['тайна'], estimates: { team_backend: 40 },
   }, pm);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const id = r.body.id as string;
@@ -31,7 +30,7 @@ describe('hidden Product tasks (FR-02)', () => {
     for (const [who, cookie] of [['guest', null], ['lead', lead]] as const) {
       for (const path of [
         '/api/features', '/api/features?internal=all', '/api/features?internal=1', `/api/features?q=${encodeURIComponent('тариф')}`,
-        '/api/overview', '/api/roadmap', '/api/priorities', '/api/graph', '/api/releases', '/api/epics', '/api/offers', '/api/features/RF-4',
+        '/api/overview', '/api/gantt', '/api/priorities', '/api/graph', '/api/releases', '/api/epics', '/api/features/RF-4',
       ]) {
         const r = await app.call('GET', path, undefined, cookie);
         assert.ok(r.status === 200, `${who} ${path}: ${r.status}`);
@@ -58,7 +57,6 @@ describe('hidden Product tasks (FR-02)', () => {
     app.many('DELETE FROM feature_relations WHERE from_id = ? RETURNING 1', id);
     app.many('DELETE FROM feature_estimates WHERE feature_id = ? RETURNING 1', id);
     app.many('DELETE FROM feature_tags WHERE feature_id = ? RETURNING 1', id);
-    app.many('DELETE FROM feature_offers WHERE feature_id = ? RETURNING 1', id);
     app.many('DELETE FROM features WHERE id = ? RETURNING 1', id);
     assert.deepEqual((await app.call('GET', '/api/overview', undefined, lead)).body.kpi, kLead);
   });
@@ -77,16 +75,16 @@ describe('hidden Product tasks (FR-02)', () => {
     const card = await app.call('GET', `/api/features/${id}`, undefined, pm);
     assert.equal(card.status, 200);
     assert.equal(card.body.feature.relations.blocks.length, 1);
-    for (const path of ['/api/overview', '/api/roadmap', '/api/priorities', '/api/epics', '/api/offers', '/api/graph']) {
+    for (const path of ['/api/overview', '/api/gantt', '/api/priorities', '/api/epics', '/api/graph']) {
       assert.ok(!text((await app.call('GET', path, undefined, pm)).body).includes(SECRET), `${path} excludes hidden tasks for product too`);
     }
-    // the planner ignores it
-    const plan = await app.call('POST', '/api/planning/propose', {}, pm);
-    assert.equal(plan.status, 201, text(plan.body));
-    assert.ok(!text(plan.body).includes(id));
+    // the sprint queue of the Product planner never offers it (it lives apart, as an internal task)
+    const plan = (await app.call('GET', '/api/planner', undefined, pm)).body;
+    assert.ok(!text(plan.queue).includes(id));
+    assert.ok(text(plan.internal).includes(id));
   });
 
-  test('hidden tasks cannot enter releases or periods; disclosure needs confirmation and is audited', async () => {
+  test('hidden tasks cannot enter releases or sprints; disclosure needs confirmation and is audited', async () => {
     const app = await setup();
     const admin = await app.user('admin@test.io', 'admin');
     const lead = await app.user('lead@test.io', 'department_lead', ['dep_sales']);
@@ -95,9 +93,10 @@ describe('hidden Product tasks (FR-02)', () => {
     const current = app.many('SELECT feature_id FROM release_features WHERE release_id = ?', rel.id).map((x: any) => x.feature_id);
     const add = await app.call('PUT', `/api/releases/${rel.id}/features`, { feature_ids: [...current, id], version: rel.version }, admin);
     assert.equal(add.status, 400);
-    const period = app.one('SELECT id FROM capacity_periods LIMIT 1').id;
     const f = () => app.one('SELECT * FROM features WHERE id = ?', id);
-    assert.equal((await app.call('PATCH', `/api/features/${id}/placement`, { period_id: period, version: f().version }, admin)).status, 400);
+    await app.call('POST', '/api/calendar/generate', { plan_hash: (await app.call('POST', '/api/calendar/generate-preview', {}, admin)).body.plan_hash }, admin);
+    const sprint = app.one("SELECT id FROM sprints WHERE code = '8.1'").id;
+    assert.equal((await app.call('PATCH', `/api/features/${id}/schedule`, { sprint_id: sprint, version: f().version }, admin)).status, 400);
 
     const noConfirm = await app.call('PATCH', `/api/features/${id}`, { is_product_internal: false, version: f().version }, admin);
     assert.equal(noConfirm.status, 409);
@@ -139,10 +138,8 @@ describe('work type (FR-07 base)', () => {
     assert.equal(both.length, 2);
     // bug: visible in general lists (it is real work), but never planned or put into a release
     assert.ok((await app.call('GET', '/api/features', undefined, pm)).body.features.some((f: any) => f.id === bug.body.id));
-    const plan = (await app.call('POST', '/api/planning/propose', {}, pm)).body;
-    assert.ok(!text(plan).includes(bug.body.id));
-    const period = app.one('SELECT id FROM capacity_periods LIMIT 1').id;
-    assert.equal((await app.call('PATCH', `/api/features/${bug.body.id}/placement`, { period_id: period, version: 1 }, pm)).status, 400);
+    const plan = (await app.call('GET', '/api/planner', undefined, pm)).body;
+    assert.ok(!text(plan.queue).includes(bug.body.id), 'bugs never queue for sprints');
     const rel = app.one('SELECT id, version FROM releases WHERE approved_at IS NULL LIMIT 1');
     const cur = app.many('SELECT feature_id FROM release_features WHERE release_id = ?', rel.id).map((x: any) => x.feature_id);
     assert.equal((await app.call('PUT', `/api/releases/${rel.id}/features`, { feature_ids: [...cur, bug.body.id], version: rel.version }, pm)).status, 400);
@@ -152,7 +149,7 @@ describe('work type (FR-07 base)', () => {
     // a bug converted into a planned task becomes plannable
     const b = app.one('SELECT version FROM features WHERE id = ?', bug.body.id);
     assert.equal((await app.call('PATCH', `/api/features/${bug.body.id}`, { task_kind: 'planned', version: b.version }, pm)).status, 200);
-    assert.equal((await app.call('PATCH', `/api/features/${bug.body.id}/placement`, { period_id: period, version: b.version + 1, confirm_overload: true, reason: 'тест' }, pm)).status, 200);
+    assert.ok((await app.call('GET', '/api/planner', undefined, pm)).body.queue.some((t: any) => t.id === bug.body.id));
   });
 });
 

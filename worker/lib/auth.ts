@@ -56,15 +56,19 @@ export async function loadApiKeyUser(env: Env, req: Request): Promise<SessionUse
  */
 export function scopeFor(method: string, path: string): ApiScope | null {
   if (method === 'GET') {
-    if (/^\/api\/(features|overview|priorities|releases|epics|offers|calendar|sprints|roadmap|graph|meta|analytics|auth\/me)(\/|$)/.test(path)) return 'tasks:read';
+    if (/^\/api\/(features|overview|priorities|releases|epics|calendar|sprints|roadmap|graph|meta|analytics|proposals|gantt|auth\/me)(\/|$)/.test(path)) return 'tasks:read';
     if (/^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
     return null;
   }
   if (method === 'POST' && path === '/api/features') return 'tasks:create';
+  // proposals: read with the list scope, create like a task; decisions, votes and links are not for keys
+  if (method === 'POST' && path === '/api/proposals') return 'tasks:create';
   if (method === 'POST' && /^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
   if (method === 'PUT' && /^\/api\/features\/[^/]+\/votes\/[^/]+$/.test(path)) return 'priorities:write-own';
-  if (/^(PATCH|POST|PUT)$/.test(method) && /^\/api\/features\/[^/]+(\/(schedule|relations|comments|estimates|blockers))?$/.test(path)) return 'tasks:update';
+  if (/^(PATCH|POST|PUT)$/.test(method) && /^\/api\/features\/[^/]+(\/(schedule|relations|comments|estimates|blockers|links|phase|phase-forecast))?$/.test(path)) return 'tasks:update';
   if (method === 'PATCH' && /^\/api\/blockers\/[^/]+$/.test(path)) return 'tasks:update';
+  if ((method === 'PATCH' || method === 'DELETE') && /^\/api\/links\/[^/]+$/.test(path)) return 'tasks:update';
+  if (method === 'PATCH' && /^\/api\/phase-events\/[^/]+$/.test(path)) return 'tasks:update';
   return null;
 }
 

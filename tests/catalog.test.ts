@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 import { setup } from './helpers';
 
 describe('catalog', () => {
-  test('feature is created manually, put into an epic, linked to offers and features', async () => {
+  test('feature is created manually, put into an epic, linked to features (offer_ids from old clients are ignored)', async () => {
     const app = await setup();
     const pm = await app.user('pm@test.io', 'product', ['dep_product']);
     const c = await app.call('POST', '/api/features', {
@@ -17,14 +17,11 @@ describe('catalog', () => {
     assert.equal((await app.call('POST', `/api/features/${c.body.id}/relations`, { type: 'related_to', target_id: 'RF-4' }, pm)).status, 201);
     const f = (await app.call('GET', '/api/features/RF-27', undefined, pm)).body.feature;
     assert.equal(f.epic.id, 'ep_4');
-    assert.deepEqual(f.offers.map((o: any) => o.id).sort(), ['of_2051', 'of_3001']);
+    assert.equal(f.offers, undefined, 'offers are gone from the task card');
     assert.equal(f.relations.blocked_by[0].key, 'RF-12');
     assert.equal(f.relations.related[0].key, 'RF-4');
     assert.deepEqual(f.estimates, { team_backend: 30, team_qa: 8 });
     assert.ok(f.estimate_missing.includes('team_frontend'), 'teams without an estimate are "not estimated", not zero');
-    // offer card shows the feature and its release
-    const offer = (await app.call('GET', '/api/offers/of_3001', undefined, pm)).body.offer;
-    assert.ok(offer.features.some((x: any) => x.key === 'RF-27'));
     // epic tree aggregates hours from features
     const epic = (await app.call('GET', '/api/epics/ep_4', undefined, pm)).body.epic;
     assert.ok(epic.features.some((x: any) => x.key === 'RF-27'));

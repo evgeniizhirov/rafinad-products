@@ -1,5 +1,7 @@
 // Calendar: releases of two sprints, accounting months, generator (FR-06), task schedule (release → sprint → production date).
 import { z } from 'zod';
+import { baselineStatements } from './phases';
+import { autoPlanStatements } from './proposals';
 import { planGeneration, validateAnchor, type CalendarAnchor } from '../domain/calendar';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
@@ -106,12 +108,8 @@ export function registerCalendarRoutes(r: Router) {
       releases,
       months: viewer === 'guest' ? [] : w.months.map((m) => ({ id: m.id, month: m.month, start_date: m.start_date, end_date: m.end_date, status: m.status, budget_limit_rub: viewer === 'editor' ? m.budget_limit_rub : undefined })),
     };
-    if (viewer === 'editor') {
-      // tasks placed in old planning periods that have no sprint yet: need a manual decision (never mapped automatically)
-      out.unmapped = visibleFeatures(w, viewer)
-        .filter((f) => isPlannable(f) && f.period_id && !f.sprint_id && !isClosed(f, idx))
-        .map((f) => ({ id: f.id, key: `RF-${f.number}`, title: f.title, period: idx.period.get(f.period_id)?.name ?? null, release_id: idx.releaseOf.get(f.id) ?? null }));
-    }
+    // the old planning periods were removed (v2-10): nothing is left to map to sprints; key kept for compatibility
+    if (viewer === 'editor') out.unmapped = [];
     return json(out);
   });
 
@@ -284,7 +282,7 @@ export function registerCalendarRoutes(r: Router) {
       // production date: explicit value, else the sprint deadline, else the release date
       const date = b.planned_production_date !== undefined ? b.planned_production_date : sprint ? sprint.production_due : targetRelease?.planned_date ?? null;
       patch.planned_production_date = date;
-      if (date && !f.baseline_production_date) patch.baseline_production_date = date; // first promise is kept for analytics
+      // the first promise (baseline) is fixed only when the release plan is approved (owner decision 13.10), see phases.ts
     }
 
     if ((f.sprint_id ?? null) !== (b.sprint_id ?? null)) changes.push({ field: 'sprint', old: curSprint?.code ?? null, new: sprint?.code ?? null });
@@ -299,7 +297,17 @@ export function registerCalendarRoutes(r: Router) {
     const moved = !!f.sprint_id && !!b.sprint_id && f.sprint_id !== b.sprint_id;
     if (overBudget.length) changes.push({ field: 'over_budget', old: null, new: overBudget });
     st.push(auditStmt(db, user, 'feature', f.id, moved ? 'rescheduled' : 'scheduled', changes, b.reason ?? null, overBudget.length > 0));
+    // vNext §1.2: an accepted proposal becomes «Запланировано» when one of its tasks gets a sprint
+    if (b.sprint_id && b.sprint_id !== f.sprint_id) st.push(...(await autoPlanStatements(db, user, f.id)));
     await tx(db, st, 'Карточку изменил другой пользователь. Обновите данные.');
+    // entering an approved release (a confirmed change) makes the task agreed: capture its baseline once
+    if (b.sprint_id && isPlannable(f)) {
+      const rel = await first(db, 'SELECT r.id, r.approved_at FROM releases r JOIN release_features rf ON rf.release_id = r.id WHERE rf.feature_id = ?', f.id);
+      if (rel?.approved_at && !(await first(db, 'SELECT 1 FROM feature_plan_baselines WHERE feature_id = ?', f.id))) {
+        const fresh = await first(db, 'SELECT * FROM features WHERE id = ?', f.id);
+        await tx(db, (await baselineStatements(db, user, fresh!, 'Включена в утверждённый релиз', rel.id)).statements);
+      }
+    }
     return json({ ok: true, version: f.version + 1 });
   });
 }

@@ -1,13 +1,12 @@
 import { z } from 'zod';
 import { cyclePathIfAdded, type Edge } from '../domain/graph';
 import { compareByPriority } from '../domain/priority';
-import { capacityKey, overloadIfAdded } from '../domain/capacity';
-import { FEATURE_LOCKED_SQL, planAlertIfStmt } from '../lib/alerts';
 import { perms, requirePerm, requireUser } from '../lib/auth';
 import { auditStmt, diffFields, type Change } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 import { canSeeFeature, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, matchesInitiator, TASK_KINDS, viewerOf, visibleFeatures, type FeatureFlag, type Viewer, type World } from '../lib/world';
+import { nextNumber } from '../lib/numbers';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД').nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -29,6 +28,7 @@ const featureFields = {
   external_ref: optText(100),
   private_notes: z.string().max(5000).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  /** «Офферы» removed in vNext: still accepted (old clients, MCP) and ignored */
   offer_ids: z.array(z.string()).max(100).optional(),
   task_kind: z.enum(TASK_KINDS).optional(),
   /** release commitment to the business (FR-03); only for planned tasks */
@@ -87,9 +87,6 @@ async function validateRefs(ctx: Ctx, b: Record<string, any>) {
   ];
   for (const [v, sql, msg] of checks) if (v && !(await first(db, sql, v))) throw badRequest(msg);
   if (b.status_id && !(await first(db, `SELECT 1 FROM statuses WHERE id = ? AND entity = 'feature'`, b.status_id))) throw badRequest('Статус не найден');
-  if (b.offer_ids?.length) {
-    for (const id of b.offer_ids) if (!(await first(db, 'SELECT 1 FROM offers WHERE id = ?', id))) throw badRequest('Оффер не найден');
-  }
   if (b.estimates) {
     for (const t of Object.keys(b.estimates)) if (!(await first(db, 'SELECT 1 FROM resource_teams WHERE id = ?', t))) throw badRequest('Ресурсная команда не найдена');
   }
@@ -135,9 +132,11 @@ export function queryFeatures(p: URLSearchParams, viewer: Viewer, w: World, idx:
   filt('category', (f, v) => f.category_id === v);
   filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
   filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
-  filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
+  // offers were removed: no task belongs to any offer any more
+  if (p.get('offer')) rows = [];
   filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
-  filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
+  // the old planning periods were removed (v2-10): no task belongs to one any more
+  if (p.getAll('period').some((v) => v && v !== 'none')) rows = [];
   filt('stage', (f, v) => f.stage_id === v);
   filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
   filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
@@ -189,6 +188,9 @@ export function registerFeatureRoutes(r: Router) {
     if (mergedFrom) dto.merged_from = { id: mergedFrom.id, key: `RF-${mergedFrom.number}` };
     if (viewer !== 'guest') {
       dto.comments = await all(ctx.env.DB, 'SELECT id, author_name, body, created_at, moved_from FROM comments WHERE feature_id = ? ORDER BY created_at', f.id);
+      // business proposals this task delivers (vNext §1.2; proposals are visible to every employee)
+      dto.proposals = (await all(ctx.env.DB, `SELECT p.id, p.number, p.title, p.status FROM proposal_features pf JOIN proposals p ON p.id = pf.proposal_id
+        WHERE pf.feature_id = ? ORDER BY p.number`, f.id)).map((p) => ({ id: p.id, key: `P-${p.number}`, title: p.title, status: p.status }));
       const mergedIds = w.features.filter((x) => x.merged_into_id === f.id).map((x) => x.id);
       dto.merged_duplicates = w.features.filter((x) => x.merged_into_id === f.id).map((x) => ({ id: x.id, key: `RF-${x.number}`, title: x.title }));
       const ids = [f.id, ...mergedIds];
@@ -232,7 +234,7 @@ export function registerFeatureRoutes(r: Router) {
     const id = newId('f');
     const now = nowIso();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const num = ((await first<{ n: number }>(db, 'SELECT COALESCE(MAX(number), 0) + 1 AS n FROM features'))?.n ?? 1);
+      const num = await nextNumber(db, 'features');
       const statements = [
         stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, author_name, assignee_name,
             requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by,
@@ -243,7 +245,6 @@ export function registerFeatureRoutes(r: Router) {
           sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id,
           kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0, b.urgency ?? null, b.fact_hours ?? null),
         ...[...new Set(b.tags ?? [])].map((t) => stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', id, t)),
-        ...[...new Set(b.offer_ids ?? [])].map((o) => stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', id, o, now, user.id)),
         ...Object.entries(b.estimates ?? {}).map(([t, h]) => stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?)', id, t, h, now, user.id)),
         auditStmt(db, user, 'feature', id, 'created', [
           { field: 'title', old: null, new: b.title },
@@ -311,18 +312,8 @@ export function registerFeatureRoutes(r: Router) {
         for (const t of after) statements.push(stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', f.id, t));
       }
     }
-    if (offer_ids) {
-      const before = (await all(db, 'SELECT offer_id FROM feature_offers WHERE feature_id = ? ORDER BY offer_id', f.id)).map((t) => t.offer_id);
-      const after = [...new Set(offer_ids)].sort();
-      if (JSON.stringify(before) !== JSON.stringify(after)) {
-        changes.push({ field: 'offers', old: before, new: after });
-        const now = nowIso();
-        for (const o of before.filter((x) => !after.includes(x))) statements.push(stmt(db, 'DELETE FROM feature_offers WHERE feature_id = ? AND offer_id = ?', f.id, o));
-        for (const o of after.filter((x) => !before.includes(x))) statements.push(stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', f.id, o, now, user.id));
-      }
-    }
     if (!changes.length) return json({ ok: true, unchanged: true, version: f.version });
-    if (!changes.some((c) => !['tags', 'offers'].includes(c.field))) {
+    if (!changes.some((c) => c.field !== 'tags')) {
       statements.push(stmt(db, 'UPDATE features SET updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', nowIso(), user.id, f.id));
     }
     statements.push(auditStmt(db, user, 'feature', f.id, 'updated', changes));
@@ -372,40 +363,9 @@ export function registerFeatureRoutes(r: Router) {
     statements.push(stmt(db, 'UPDATE features SET updated_at = ?, updated_by = ? WHERE id = ?', now, user.id, f.id));
     if (changes.length) {
       statements.push(auditStmt(db, user, 'estimate', f.id, 'estimates_changed', changes));
-      statements.push(planAlertIfStmt(db, 'estimate_changed', `Изменена оценка трудозатрат утверждённой задачи RF-${f.number}`, 'feature', f.id, FEATURE_LOCKED_SQL, f.id));
     }
     await tx(db, statements, 'Оценку изменил другой пользователь. Обновите карточку.');
     return json({ ok: true });
-  });
-
-  // ───── placement into a planning period (with overload confirmation) ─────
-  r.patch('/api/features/:id/placement', async (ctx) => {
-    const user = requirePerm(ctx, perms.plan);
-    const b = await readJson(ctx, z.object({
-      period_id: z.string().nullable(),
-      version: z.number().int(),
-      lock: z.boolean().optional(),
-      confirm_overload: z.boolean().optional(),
-      reason: z.string().trim().max(500).optional(),
-    }));
-    const f = await resolveFeature(ctx, ctx.params.id);
-    const db = ctx.env.DB;
-    if (b.period_id && !isPlannable(f)) throw badRequest('Баги, оперативные доработки и внутренние задачи продукта не размещаются в плановых периодах');
-    if (b.period_id && !(await first(db, 'SELECT 1 FROM capacity_periods WHERE id = ?', b.period_id))) throw badRequest('Период не найден');
-    const overload = b.period_id && b.period_id !== f.period_id ? await overloadFor(ctx, f.id, b.period_id) : [];
-    if (overload.length && !b.confirm_overload) {
-      throw conflict('overload', 'Перенос превышает доступные часы команды. Подтвердите с указанием причины.', { overload });
-    }
-    if (overload.length && !b.reason) throw badRequest('Укажите причину превышения лимита');
-    const patch: Row = { period_id: b.period_id, placement_locked: b.lock === undefined ? (b.period_id ? f.placement_locked : 0) : b.lock ? 1 : 0 };
-    const changes = diffFields(f, patch);
-    if (!changes.length) return json({ ok: true, unchanged: true });
-    await tx(db, [
-      guardVersion(db, 'features', f.id, b.version),
-      stmt(db, `UPDATE features SET ${changes.map((c) => `${c.field} = ?`).join(', ')}, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?`, ...changes.map((c) => c.new), nowIso(), user.id, f.id),
-      auditStmt(db, user, 'placement', f.id, overload.length ? 'moved_over_capacity' : 'moved', changes, b.reason ?? null, overload.length > 0),
-    ], 'Карточку изменил другой пользователь. Обновите план.');
-    return json({ ok: true, overload });
   });
 
   // ───── relations ─────
@@ -488,23 +448,11 @@ export function registerFeatureRoutes(r: Router) {
     const nodes = [...nodeIds].map((id) => {
       const f = idx.feature.get(id)!;
       if (!visible.has(id)) return { id: nodeId(id), hidden: true };
-      return { ...featureRef(f, viewer, idx), id, period_id: f.period_id, epic_id: f.epic_id, priority: idx.priority.get(id)?.score ?? null };
+      return { ...featureRef(f, viewer, idx), id, period_id: null, epic_id: f.epic_id, priority: idx.priority.get(id)?.score ?? null };
     });
     return json({ nodes, edges: edges.map((e) => ({ id: viewer === 'editor' ? e.id : undefined, from: nodeId(e.from_id), to: nodeId(e.to_id) })) });
   });
 }
 
-/** overload of every team if `featureId` is moved into `periodId` */
-export async function overloadFor(ctx: Ctx, featureId: string, periodId: string) {
-  const db = ctx.env.DB;
-  const est = await all(db, 'SELECT team_id, hours FROM feature_estimates WHERE feature_id = ?', featureId);
-  const caps = new Map((await all(db, 'SELECT team_id, hours FROM team_capacities WHERE period_id = ?', periodId)).map((c) => [capacityKey(periodId, c.team_id), c.hours]));
-  const planned = new Map(
-    (await all(db, `SELECT e.team_id, SUM(e.hours) AS h FROM feature_estimates e JOIN features f ON f.id = e.feature_id
-       WHERE f.period_id = ? AND f.id <> ? AND f.merged_into_id IS NULL AND f.task_kind = 'planned' AND f.is_product_internal = 0 GROUP BY e.team_id`, periodId, featureId)).map((p) => [capacityKey(periodId, p.team_id), p.h]),
-  );
-  const teams = new Map((await all(db, 'SELECT id, name FROM resource_teams')).map((t) => [t.id, t.name]));
-  return overloadIfAdded(periodId, Object.fromEntries(est.map((e) => [e.team_id, e.hours])), caps, planned).map((o) => ({ ...o, team_name: teams.get(o.teamId) }));
-}
 
 export { bool };

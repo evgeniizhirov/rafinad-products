@@ -156,8 +156,7 @@ export interface Meta {
   categories: any[];
   statuses: any[];
   stages: any[];
-  periods: any[];
-  settings: { public_show_estimates: boolean; public_show_capacity: boolean; planning_horizon: number };
+  settings: { public_show_estimates: boolean };
   viewer: 'guest' | 'employee' | 'editor';
 }
 
@@ -175,10 +174,8 @@ export function useDict() {
   return {
     team: (id: string) => meta.teams.find((t) => t.id === id),
     dept: (id: string) => meta.departments.find((d) => d.id === id),
-    period: (id: string | null) => meta.periods.find((p) => p.id === id),
     activeTeams: meta.teams.filter((t) => t.is_active),
     activeDepts: meta.departments.filter((d) => d.is_active),
-    activePeriods: meta.periods.filter((p) => p.is_active),
     statuses: (entity: string) => meta.statuses.filter((s) => s.entity === entity && s.is_active),
   };
 }

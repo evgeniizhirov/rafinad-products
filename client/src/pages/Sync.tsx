@@ -1,18 +1,18 @@
 import { useMemo, useState } from 'react';
 import { I } from '../icons';
+import { LINK_KIND_LABEL } from './ExternalLinks';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, openFeature, toast, useApi, useApp, useQueryParam } from '../lib';
 import { Empty, ErrorBox, Field, Loading, Modal, Notice, PageHead, useDirty } from '../ui';
 
 const SHEETS = [
   { key: 'epics', label: 'Эпики' },
-  { key: 'offers', label: 'Офферы' },
   { key: 'features', label: 'Фичи' },
   { key: 'relations', label: 'Связи' },
 ] as const;
 
 const ACTION_LABEL: Record<string, string> = { create: 'Создать', update: 'Обновить', unchanged: 'Без изменений', duplicate: 'Возможный дубль', error: 'Ошибка' };
 const ACTION_PILL: Record<string, string> = { create: 'ok', update: 'info', unchanged: '', duplicate: 'warn', error: 'danger' };
-const ENTITY_LABEL: Record<string, string> = { epic: 'Эпик', feature: 'Задача', offer: 'Оффер', relation: 'Связь', sheet: 'Лист' };
+const ENTITY_LABEL: Record<string, string> = { epic: 'Эпик', feature: 'Задача', relation: 'Связь', sheet: 'Лист' };
 const VIS_LABEL: Record<string, string> = { draft: 'черновики', internal: 'внутренние (видны команде)' };
 const isFlat = (s: any) => s?.config?.format === 'flat';
 
@@ -68,7 +68,7 @@ export function Sync() {
 
   return (
     <>
-      <PageHead title="Синхронизация" sub="Загрузка задач из Google Sheets: таблица задач отдела (например, TaskFlow) или шаблон из листов эпиков, фич, офферов и связей. Запуск вручную, изменения применяются только после предпросмотра.">
+      <PageHead title="Синхронизация" sub="Загрузка задач из Google Sheets: таблица задач отдела (например, TaskFlow) или шаблон из листов эпиков, фич и связей. Запуск вручную, изменения применяются только после предпросмотра.">
         {sources.data && (sources.data.bug_presets ?? []).some((p: any) => !sources.data.sources.some((x: any) => x.spreadsheet_id === p.spreadsheet_id && x.config?.flat?.sheet === p.config.flat.sheet)) && (
           <button className="btn" title="Две вкладки таблицы «Прием обращений по багам/доработкам»: «Баги» и «Доработки»" onClick={async () => {
             for (const p of sources.data.bug_presets) {
@@ -160,7 +160,7 @@ export function Sync() {
                   <b>Таблица задач</b> (формат «одна таблица»): лист со строками задач и колонками «Задача», «Сотрудник», «Срок», «Сделано», «Оценка в часах» и т. п. — соответствие колонок задаётся в настройках источника, для TaskFlow оно заполнено заранее.
                   Если в таблице нет колонки с ID, задача узнаётся по тексту и исполнителю: переименованная задача придёт как «возможный дубль» и её можно привязать к прежней карточке.
                 </li>
-                <li><b>Шаблон из 4 листов</b>: <b>Epics</b>, <b>Features</b>, <b>Offers</b>, <b>Relations</b> (имена можно изменить в настройках). Шаблоны с примерами строк:{' '}
+                <li><b>Шаблон из 3 листов</b>: <b>Epics</b>, <b>Features</b>, <b>Relations</b> (имена можно изменить в настройках). Шаблоны с примерами строк:{' '}
                   {SHEETS.map((sh, i) => <span key={sh.key}>{i > 0 && ', '}<a href={`/api/import/template/${sh.key}.csv`} style={{ color: 'var(--info)' }}>{sh.label}</a></span>)}.
                 </li>
                 <li>
@@ -230,7 +230,7 @@ const FLAT_FIELDS: { key: string; label: string; hint?: string; required?: boole
 
 function SourceForm({ source, defaults, flatPreset, onClose }: { source: any | null; defaults: any; flatPreset: any; onClose: () => void }) {
   const { meta } = useApp();
-  const base = defaults ?? { sheets: { epics: 'Epics', features: 'Features', offers: 'Offers', relations: 'Relations' }, hoursColumns: {} };
+  const base = defaults ?? { sheets: { epics: 'Epics', features: 'Features', relations: 'Relations' }, hoursColumns: {} };
   const cfg = source?.config ?? base;
   const preset = flatPreset?.flat ?? { sheet: 'TaskFlow', columns: { title: 'Задача' }, flags: {}, hours: {} };
   const [name, setName] = useState(source?.name ?? '');
@@ -245,29 +245,43 @@ function SourceForm({ source, defaults, flatPreset, onClose }: { source: any | n
   const [deadline, setDeadline] = useState<string>((flat0.columns?.deadline ?? []).join(', '));
   const [flags, setFlags] = useState<[string, string][]>(Object.entries(flat0.flags ?? {}));
   const [hours, setHours] = useState<[string, string][]>(Object.entries(flat0.hours ?? {}));
+  const [links, setLinks] = useState<[string, string][]>(Object.entries(flat0.links ?? {}));
+  const [linksFromText, setLinksFromText] = useState<boolean>(!!flat0.links_from_text);
   const [vis, setVis] = useState<'draft' | 'internal'>(source ? cfg.newVisibility ?? 'draft' : 'internal');
   const [active, setActive] = useState(source?.is_active ?? true);
-  const dirty = useDirty({ name, kind, format, sheet, sheets, cols, flatSheet, flatCols, deadline, flags, hours, vis, active });
+  const dirty = useDirty({ name, kind, format, sheet, sheets, cols, flatSheet, flatCols, deadline, flags, hours, links, linksFromText, vis, active });
   const pairs = (l: [string, string][]) => Object.fromEntries(l.filter(([c, t]) => c.trim() && t.trim()).map(([c, t]) => [c.trim(), t.trim()]));
   const submit = async () => {
     const config: any = { format, sheets, hoursColumns: pairs(cols), newVisibility: vis };
     if (format === 'flat') {
-      const columns: any = Object.fromEntries(Object.entries(flatCols).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+      // fields not shown in this form (work type, status / urgency maps, Jira id pattern, extra columns…) are kept
+      const columns: any = { ...(flat0.columns ?? {}) };
+      for (const [k, v] of Object.entries(flatCols)) {
+        if (v.trim()) columns[k] = v.trim();
+        else delete columns[k];
+      }
       const dl = deadline.split(',').map((x) => x.trim()).filter(Boolean);
       if (dl.length) columns.deadline = dl;
-      config.flat = { sheet: flatSheet.trim(), columns, flags: pairs(flags), hours: pairs(hours) };
+      else delete columns.deadline;
+      const linkMap = pairs(links);
+      config.flat = { ...flat0, sheet: flatSheet.trim(), columns, flags: pairs(flags), hours: pairs(hours), links: Object.keys(linkMap).length ? linkMap : undefined, links_from_text: linksFromText || undefined };
     }
     const r = source
       ? await mutate(`/import/sources/${source.id}`, 'PATCH', { name, config, is_active: active, ...(kind === 'google' && sheet !== source.spreadsheet_id ? { spreadsheet: sheet } : {}), version: source.version }, 'Источник сохранён')
       : await mutate('/import/sources', 'POST', { name, kind, config, ...(kind === 'google' ? { spreadsheet: sheet } : {}) }, 'Источник добавлен');
     if (r) onClose();
   };
-  const pairEditor = (list: [string, string][], setList: (f: (l: [string, string][]) => [string, string][]) => void, placeholder: string, right: 'team' | 'tag') => (
+  const pairEditor = (list: [string, string][], setList: (f: (l: [string, string][]) => [string, string][]) => void, placeholder: string, right: 'team' | 'tag' | 'link') => (
     <div className="stack tight">
       {list.map(([c, t], i) => (
         <div key={i} className="row">
           <input className="input sm" value={c} placeholder={placeholder} onChange={(e) => setList((l) => l.map((x, j) => (j === i ? [e.target.value, x[1]] : x)))} />
-          {right === 'team' ? (
+          {right === 'link' ? (
+            <select className="select sm" value={t} onChange={(e) => setList((l) => l.map((x, j) => (j === i ? [x[0], e.target.value] : x)))} aria-label="Тип ссылки">
+              <option value="">Тип ссылки</option>
+              {Object.entries(LINK_KIND_LABEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+          ) : right === 'team' ? (
             <select className="select sm" value={t} onChange={(e) => setList((l) => l.map((x, j) => (j === i ? [x[0], e.target.value] : x)))}>
               <option value="">Команда</option>
               {meta.teams.map((tm) => <option key={tm.id} value={tm.code}>{tm.name}</option>)}
@@ -296,7 +310,7 @@ function SourceForm({ source, defaults, flatPreset, onClose }: { source: any | n
         <Field label="Формат таблицы">
           <select className="select" value={format} onChange={(e) => { const f = e.target.value as 'template' | 'flat'; setFormat(f); if (!source) setVis(f === 'flat' ? 'internal' : 'draft'); }}>
             <option value="flat">Одна таблица задач (TaskFlow и похожие)</option>
-            <option value="template">Шаблон: эпики, фичи, офферы, связи</option>
+            <option value="template">Шаблон: эпики, фичи, связи</option>
           </select>
         </Field>
         <Field label="Новые карточки" hint="Обновления существующих карточек видимость не меняют">
@@ -319,6 +333,12 @@ function SourceForm({ source, defaults, flatPreset, onClose }: { source: any | n
             </Field>
             <Field label="Колонки-флаги → тег" span2 hint="Если в ячейке «Да», задаче ставится тег">
               {pairEditor(flags, setFlags, 'Название колонки, например Влетевшая', 'tag')}
+            </Field>
+            <Field label="Колонки ссылок → тип" span2 hint="Адреса из этих колонок становятся внешними ссылками задачи. В ячейке может быть несколько адресов; гиперссылки, скрытые за текстом, читаются через сервисный аккаунт. Система не обращается к Jira, Bitrix24 и Confluence — хранит только адреса.">
+              <div className="stack tight">
+                {pairEditor(links, setLinks, 'Название колонки, например задача в jira', 'link')}
+                <label className="check small"><input type="checkbox" checked={linksFromText} onChange={(e) => setLinksFromText(e.target.checked)} />Брать ссылки и из текста задачи и комментария (тип определяется по адресу)</label>
+              </div>
             </Field>
           </>
         ) : (
@@ -405,14 +425,17 @@ function RunView({ runId, onClose }: { runId: string; onClose: () => void }) {
   const run = data?.run;
   const items = useMemo(() => {
     if (!run) return [];
-    if (filter === 'attention') return run.items.filter((i: any) => i.action === 'duplicate' || i.action === 'error' || i.warnings.length > 0 || i.diff.some((d: any) => d.kind !== 'update'));
+    if (filter === 'attention') return run.items.filter(needsAttention);
+    if (filter === 'links') return run.items.filter((i: any) => linkChanges(i.payload?.link_plan) || i.warnings.some((w: string) => w.startsWith('Ссылка не импортирована')));
     if (filter === 'all') return run.items;
     return run.items.filter((i: any) => i.action === filter);
   }, [run, filter]);
   if (!run) return error ? <ErrorBox error={error} /> : <Loading rows={8} />;
   const editable = run.status === 'preview';
   const s = run.summary;
-  const attention = run.items.filter((i: any) => i.action === 'duplicate' || i.action === 'error' || i.warnings.length > 0 || i.diff.some((d: any) => d.kind !== 'update')).length;
+  const attention = run.items.filter(needsAttention).length;
+  const lk = run.links ?? { add: 0, update: 0, conflicts: 0, missing: 0, remove: 0, invalid: 0, on_undecided_rows: 0, rows: 0 };
+  const linkTotal = lk.add + lk.update + lk.conflicts + lk.missing + lk.invalid + lk.on_undecided_rows;
   const apply = async () => {
     setBusy(true);
     try {
@@ -432,6 +455,7 @@ function RunView({ runId, onClose }: { runId: string; onClose: () => void }) {
     { id: 'unchanged', label: 'Без изменений', n: s.unchanged },
     { id: 'duplicate', label: 'Возможные дубли', n: s.duplicate },
     { id: 'error', label: 'Ошибки', n: s.error },
+    ...(linkTotal ? [{ id: 'links', label: 'Внешние ссылки', n: lk.rows + (lk.invalid ? 1 : 0) }] : []),
     { id: 'all', label: 'Все строки', n: s.total },
   ];
   return (
@@ -446,6 +470,19 @@ function RunView({ runId, onClose }: { runId: string; onClose: () => void }) {
       {run.status === 'failed' && <Notice kind="danger">Ошибка записи: импорт отменён целиком, данные не изменены. {run.error}</Notice>}
       {run.status === 'discarded' && <Notice kind="info">Этот предпросмотр отменён.</Notice>}
       {(run.counts?.notes ?? []).length > 0 && <Notice kind="info">{run.counts.notes.join('. ')}</Notice>}
+      {linkTotal > 0 && (
+        <Notice kind={lk.conflicts || lk.invalid ? 'warn' : 'info'}>
+          <b>Внешние ссылки:</b>{' '}
+          {[
+            lk.add && `добавится ${lk.add}`,
+            lk.update && `изменится тип у ${lk.update}`,
+            lk.conflicts && `конфликтов ${lk.conflicts} (по умолчанию остаётся версия системы)`,
+            lk.missing && `нет в источнике ${lk.missing}${lk.remove ? `, из них удалить ${lk.remove}` : ' — останутся в карточках'}`,
+            lk.invalid && `не распознано ${lk.invalid}`,
+            lk.on_undecided_rows && `ещё ${lk.on_undecided_rows} — в строках, где нужно решение по дублю`,
+          ].filter(Boolean).join(', ')}. Ссылки, добавленные вручную, импорт не меняет.
+        </Notice>
+      )}
       <div className="summary-chips">
         {chips.map((c) => (
           <button key={c.id} className={filter === c.id ? 'on' : ''} onClick={() => setFilter(c.id)}>
@@ -482,6 +519,54 @@ function RunView({ runId, onClose }: { runId: string; onClose: () => void }) {
   );
 }
 
+const linkChanges = (p: any) => !!p && (p.add.length + p.update.length + p.conflicts.length + p.missing.length) > 0;
+const needsAttention = (i: any) => i.action === 'duplicate' || i.action === 'error' || i.warnings.length > 0 || i.diff.some((d: any) => d.kind !== 'update')
+  || (i.payload?.link_plan?.conflicts?.length ?? 0) > 0 || (i.payload?.link_plan?.missing?.length ?? 0) > 0;
+
+/** what the import does with the external links of one task row; conflicts and «нет в источнике» need a choice */
+function LinkPlanView({ it, editable, setRes }: { it: any; editable: boolean; setRes: (r: any) => void }) {
+  const plan = it.payload.link_plan;
+  const res = it.resolution ?? { mode: 'update', targetId: it.target_id, fields: {}, protected: {} };
+  // local copy: two quick clicks must not overwrite each other while the first answer is on its way
+  const [choice, setChoice] = useState<{ source?: string[]; remove?: string[] }>(res.links ?? {});
+  const toggle = (key: 'source' | 'remove', url: string, on: boolean) => {
+    const list = new Set<string>(choice[key] ?? []);
+    if (on) list.add(url); else list.delete(url);
+    const next = { ...choice, [key]: [...list] };
+    setChoice(next);
+    setRes({ ...res, links: next });
+  };
+  const kind = (k: string) => LINK_KIND_LABEL[k] ?? k;
+  const a = (url: string) => <a href={url} target="_blank" rel="noopener noreferrer nofollow" className="ellipsis" style={{ color: 'var(--info)' }}>{url}</a>;
+  return (
+    <div className="stack tight small" style={{ marginTop: 8 }}>
+      <div className="muted">Внешние ссылки</div>
+      {plan.add.map((l: any) => <div key={`a${l.url}`} className="row" style={{ gap: 6 }}><span className="pill ok">добавится</span><span>{kind(l.kind)}</span>{a(l.url)}</div>)}
+      {plan.update.map((l: any) => <div key={`u${l.url}`} className="row" style={{ gap: 6 }}><span className="pill info">тип</span><span>{kind(l.from)} → {kind(l.to)}</span>{a(l.url)}</div>)}
+      {plan.conflicts.map((l: any) => {
+        const src = (choice.source ?? []).includes(l.url);
+        return (
+          <div key={`c${l.url}`} className="row wrap" style={{ gap: 6 }}>
+            <span className="pill warn">конфликт</span>{a(l.url)}
+            <span className="muted">изменена вручную: в системе «{kind(l.local)}», в таблице «{kind(l.source)}»</span>
+            <div className="choice">
+              <button disabled={!editable} className={!src ? 'on' : ''} onClick={() => toggle('source', l.url, false)}>Оставить</button>
+              <button disabled={!editable} className={src ? 'on' : ''} onClick={() => toggle('source', l.url, true)}>Из таблицы</button>
+            </div>
+          </div>
+        );
+      })}
+      {plan.missing.map((l: any) => (
+        <div key={`m${l.url}`} className="row wrap" style={{ gap: 6 }}>
+          <span className="pill outline">нет в источнике</span><span>{kind(l.kind)}</span>{a(l.url)}
+          <label className="check"><input type="checkbox" disabled={!editable} checked={(choice.remove ?? []).includes(l.url)} onChange={(e) => toggle('remove', l.url, e.target.checked)} />Удалить из карточки</label>
+        </div>
+      ))}
+      {plan.kept.length > 0 && <div className="muted">Уже есть в карточке (добавлены вручную или другим источником): {plan.kept.length}</div>}
+    </div>
+  );
+}
+
 function ImportItem({ runId, it, editable }: { runId: string; it: any; editable: boolean }) {
   const res = it.resolution;
   const setRes = (resolution: any) => mutate(`/import/runs/${runId}/items/${it.id}`, 'PATCH', { resolution });
@@ -497,10 +582,10 @@ function ImportItem({ runId, it, editable }: { runId: string; it: any; editable:
         <span className="small muted">{ENTITY_LABEL[it.entity_type]}</span>
         {it.external_id && it.entity_type !== 'relation' && <span className="key">{it.external_id}</span>}
         <b className="grow" style={{ minWidth: 200 }}>{title}</b>
-        {skipped && <span className="pill outline">пропущено</span>}
+        {skipped && <span className="pill outline">{p.tombstone ? `удалена администратором (${p.tombstone.key})` : 'пропущено'}</span>}
         {editable && ['create', 'update'].includes(it.action) && (
           skipped
-            ? <button className="btn ghost sm" onClick={() => setRes(it.action === 'create' ? { mode: 'create' } : { mode: 'update', targetId: it.target_id, fields: {}, protected: {} })}>Вернуть</button>
+            ? <button className="btn ghost sm" onClick={() => setRes(it.action === 'create' ? { mode: 'create' } : { mode: 'update', targetId: it.target_id, fields: {}, protected: {} })}>{p.tombstone ? 'Восстановить импорт' : 'Вернуть'}</button>
             : <button className="btn ghost sm" onClick={() => setRes({ mode: 'skip' })}>Пропустить</button>
         )}
       </div>
@@ -531,6 +616,7 @@ function ImportItem({ runId, it, editable }: { runId: string; it: any; editable:
           {res?.mode === 'link' && <div className="small muted">Источник будет привязан к выбранной карточке; её поля сейчас не перезаписываются.</div>}
         </div>
       )}
+      {p.link_plan && !skipped && linkChanges(p.link_plan) && <LinkPlanView it={it} editable={editable} setRes={setRes} />}
       {it.diff.length > 0 && !skipped && (
         <table className="diff-table">
           <thead><tr><th>Поле</th><th>В системе</th><th>В таблице</th><th>Решение</th></tr></thead>

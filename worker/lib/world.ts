@@ -35,16 +35,12 @@ export interface World {
   categories: Row[];
   statuses: Row[];
   stages: Row[];
-  periods: Row[];
-  capacities: Row[];
   settings: Record<string, string>;
   epics: Row[];
   features: Row[];
   estimates: Row[];
   votes: Row[];
   tags: Row[];
-  offers: Row[];
-  featureOffers: Row[];
   relations: Row[];
   releases: Row[];
   releaseFeatures: Row[];
@@ -54,19 +50,28 @@ export interface World {
   months: Row[];
   /** business blockers (FR-03): what we wait for, from whom, since when */
   blockers: Row[];
+  /** external links (vNext §3) — URLs only, shown to signed-in employees, never to guests */
+  links: Row[];
 }
 
 /**
  * Loads the catalog for one viewer. Hidden Product tasks (FR-02) are removed together with every row that
- * references them (votes, estimates, tags, offers, relations, release links), so no list, counter, graph,
+ * references them (votes, estimates, tags, relations, release links), so no list, counter, graph,
  * relation or aggregate built on the world can reveal them — not even as a "hidden" placeholder.
  * They stay only when product/admin explicitly ask for them (`includeInternal`): the task list with
- * `?internal=…` and the task card. General views (overview, roadmap, priorities, releases, epics, offers,
- * planning) never include them, for any role.
+ * `?internal=…` and the task card. General views (overview, Gantt, priorities, releases, epics)
+ * never include them, for any role.
  */
 export async function loadWorld(db: D1Database, viewer: Viewer | 'system', opts: { includeInternal?: boolean } = {}): Promise<World> {
   const w = await loadAll(db);
   return (viewer === 'editor' || viewer === 'system') && opts.includeInternal ? w : withoutProductInternal(w);
+}
+
+export function linkDto(l: Row) {
+  return {
+    id: l.id, kind: l.kind, url: l.url, title: l.title ?? null, origin: l.origin, source_id: l.source_id ?? null,
+    locally_edited: bool(l.locally_edited), updated_at: l.updated_at, version: l.version,
+  };
 }
 
 export function withoutProductInternal(w: World): World {
@@ -79,10 +84,10 @@ export function withoutProductInternal(w: World): World {
     estimates: w.estimates.filter((x) => keep(x.feature_id)),
     votes: w.votes.filter((x) => keep(x.feature_id)),
     tags: w.tags.filter((x) => keep(x.feature_id)),
-    featureOffers: w.featureOffers.filter((x) => keep(x.feature_id)),
     relations: w.relations.filter((x) => keep(x.from_id) && keep(x.to_id)),
     releaseFeatures: w.releaseFeatures.filter((x) => keep(x.feature_id)),
     blockers: w.blockers.filter((x) => keep(x.feature_id)),
+    links: w.links.filter((x) => keep(x.feature_id)),
   };
 }
 
@@ -94,16 +99,12 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM categories ORDER BY sort_order, name'),
     q('SELECT * FROM statuses ORDER BY entity, sort_order'),
     q('SELECT * FROM stages ORDER BY sort_order'),
-    q('SELECT * FROM capacity_periods ORDER BY start_date, id'),
-    q('SELECT * FROM team_capacities'),
     q('SELECT key, value FROM app_settings'),
     q('SELECT * FROM epics ORDER BY number'),
     q('SELECT * FROM features ORDER BY number'),
     q('SELECT * FROM feature_estimates'),
     q('SELECT feature_id, department_id, score, voted_at, version FROM department_votes'),
     q('SELECT * FROM feature_tags ORDER BY tag'),
-    q('SELECT * FROM offers ORDER BY name'),
-    q('SELECT * FROM feature_offers'),
     q('SELECT * FROM feature_relations'),
     q('SELECT * FROM releases ORDER BY planned_date IS NULL, planned_date, name'),
     q('SELECT * FROM release_features'),
@@ -111,14 +112,15 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM sprints ORDER BY start_date, ordinal'),
     q('SELECT * FROM accounting_months ORDER BY month'),
     q('SELECT * FROM feature_blockers ORDER BY started_at, created_at'),
+    q('SELECT * FROM feature_links ORDER BY kind, created_at, id'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const settings: Record<string, string> = {};
-  for (const s of r(7)) settings[s.key] = s.value;
+  for (const s of r(5)) settings[s.key] = s.value;
   return {
-    departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
-    epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12), offers: r(13), featureOffers: r(14),
-    relations: r(15), releases: r(16), releaseFeatures: r(17), users: r(18), sprints: r(19), months: r(20), blockers: r(21),
+    departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), settings,
+    epics: r(6), features: r(7), estimates: r(8), votes: r(9), tags: r(10),
+    relations: r(11), releases: r(12), releaseFeatures: r(13), users: r(14), sprints: r(15), months: r(16), blockers: r(17), links: r(18),
   };
 }
 
@@ -132,16 +134,13 @@ export interface Indexes {
   stage: Map<string, Row>;
   epic: Map<string, Row>;
   feature: Map<string, Row>;
-  offer: Map<string, Row>;
   release: Map<string, Row>;
-  period: Map<string, Row>;
   sprint: Map<string, Row>;
   openBlockersBy: Map<string, Row[]>;
+  linksBy: Map<string, Row[]>;
   estimatesBy: Map<string, Row[]>;
   votesBy: Map<string, Row[]>;
   tagsBy: Map<string, string[]>;
-  offersByFeature: Map<string, string[]>;
-  featuresByOffer: Map<string, string[]>;
   releaseOf: Map<string, string>;
   featuresByRelease: Map<string, string[]>;
   priority: Map<string, PriorityResult>;
@@ -167,14 +166,6 @@ export function indexWorld(w: World): Indexes {
       computePriority((votesBy.get(f.id) ?? []).map((v) => ({ departmentId: v.department_id, score: v.score, votedAt: v.voted_at })), weights),
     );
   }
-  const offersByFeature = new Map<string, string[]>();
-  const featuresByOffer = new Map<string, string[]>();
-  for (const fo of w.featureOffers) {
-    if (!offersByFeature.has(fo.feature_id)) offersByFeature.set(fo.feature_id, []);
-    offersByFeature.get(fo.feature_id)!.push(fo.offer_id);
-    if (!featuresByOffer.has(fo.offer_id)) featuresByOffer.set(fo.offer_id, []);
-    featuresByOffer.get(fo.offer_id)!.push(fo.feature_id);
-  }
   const releaseOf = new Map<string, string>();
   const featuresByRelease = new Map<string, string[]>();
   for (const rf of w.releaseFeatures) {
@@ -193,16 +184,13 @@ export function indexWorld(w: World): Indexes {
     stage: new Map(w.stages.map((s) => [s.id, s])),
     epic: new Map(w.epics.map((s) => [s.id, s])),
     feature: new Map(w.features.map((s) => [s.id, s])),
-    offer: new Map(w.offers.map((s) => [s.id, s])),
     release: new Map(w.releases.map((s) => [s.id, s])),
-    period: new Map(w.periods.map((s) => [s.id, s])),
     sprint: new Map(w.sprints.map((s) => [s.id, s])),
     openBlockersBy: groupBy(w.blockers.filter((b) => !b.resolved_at), (b) => b.feature_id),
+    linksBy: groupBy(w.links, (l) => l.feature_id),
     estimatesBy: groupBy(w.estimates, (e) => e.feature_id),
     votesBy,
     tagsBy,
-    offersByFeature,
-    featuresByOffer,
     releaseOf,
     featuresByRelease,
     priority,
@@ -211,7 +199,7 @@ export function indexWorld(w: World): Indexes {
 
 // ───────────────────────── DTO builders ─────────────────────────
 
-const statusDto = (s: Row | undefined) => (s ? { id: s.id, name: s.name, semantic: s.semantic, color: s.color } : null);
+export const statusDto = (s: Row | undefined) => (s ? { id: s.id, name: s.name, semantic: s.semantic, color: s.color } : null);
 const categoryDto = (c: Row | undefined) => (c ? { id: c.id, name: c.name, color: c.color } : null);
 
 export function featureRef(f: Row | undefined, viewer: Viewer, idx: Indexes) {
@@ -241,7 +229,6 @@ export interface FeatureDtoOptions {
 export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts: FeatureDtoOptions = {}) {
   const epic = f.epic_id ? idx.epic.get(f.epic_id) : undefined;
   const release = idx.releaseOf.has(f.id) ? idx.release.get(idx.releaseOf.get(f.id)!) : undefined;
-  const period = f.period_id ? idx.period.get(f.period_id) : undefined;
   const pr = idx.priority.get(f.id)!;
   const estRows = idx.estimatesBy.get(f.id) ?? [];
   const activeTeams = w.teams.filter((t) => bool(t.is_active));
@@ -272,21 +259,18 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     planned_start: f.planned_start,
     planned_end: f.planned_end,
     closed_at: f.closed_at,
-    period: period ? { id: period.id, name: period.name, start_date: period.start_date, end_date: period.end_date } : null,
+    // the old planning periods were removed (vNext v2-10, migration 0018): keys kept for API compatibility
+    period: null,
     sprint: sprintRef(f.sprint_id ? idx.sprint.get(f.sprint_id) : undefined, viewer, idx),
     planned_production_date: f.planned_production_date ?? null,
     urgency: f.urgency ?? null,
     is_focus: bool(f.is_focus),
-    placement_locked: bool(f.placement_locked),
+    placement_locked: false,
     release: release && canSee(viewer, release.visibility)
       ? { id: release.id, name: release.name, version_label: release.version_label, planned_date: release.planned_date, approved: !!release.approved_at }
       : null,
     priority: pr,
     votes: (idx.votesBy.get(f.id) ?? []).map((v) => ({ department_id: v.department_id, score: v.score, voted_at: v.voted_at, ...(viewer !== 'guest' ? { version: v.version } : {}) })),
-    offers: (idx.offersByFeature.get(f.id) ?? [])
-      .map((id) => idx.offer.get(id))
-      .filter((o): o is Row => !!o && canSee(viewer, o.visibility))
-      .map((o) => ({ id: o.id, name: o.name, external_code: o.external_code })),
   };
   if (withEst) {
     dto.estimates = estimates;
@@ -307,6 +291,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     dto.updated_at = f.updated_at;
     dto.estimate_manual = manual;
     dto.estimate_versions = estVersions;
+    dto.links = (idx.linksBy.get(f.id) ?? []).map(linkDto);
   }
   if (viewer === 'editor') dto.private_notes = opts.detail ? f.private_notes : undefined;
 
@@ -369,7 +354,7 @@ export function hasFlag(flag: FeatureFlag, f: Row, w: World, idx: Indexes): bool
 }
 
 /**
- * Tasks of the general lists (backlog, priorities, roadmap, overview, releases, epics, offers, planning).
+ * Tasks of the general lists (backlog, priorities, roadmap, overview, releases, epics, planning).
  * Hidden Product tasks never belong there; product/admin open them with `scope = 'internal'` (or `'all'`).
  */
 export function visibleFeatures(w: World, viewer: Viewer, scope: 'general' | 'internal' | 'all' = 'general'): Row[] {
@@ -432,12 +417,9 @@ export function metaDto(w: World, viewer: Viewer) {
     teams: w.teams.map((t) => ({ id: t.id, code: t.code, name: t.name, color: t.color, is_active: bool(t.is_active), sort_order: t.sort_order, version: t.version })),
     categories: w.categories.map((c) => ({ id: c.id, name: c.name, color: c.color, is_active: bool(c.is_active), sort_order: c.sort_order, version: c.version })),
     statuses: w.statuses.map((s) => ({ id: s.id, entity: s.entity, code: s.code, name: s.name, semantic: s.semantic, color: s.color, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
-    stages: w.stages.map((s) => ({ id: s.id, code: s.code, name: s.name, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
-    periods: w.periods.map((p) => ({ id: p.id, name: p.name, start_date: p.start_date, end_date: p.end_date, is_active: bool(p.is_active), version: p.version })),
+    stages: w.stages.map((s) => ({ id: s.id, code: s.code, name: s.name, phase: s.phase ?? null, is_active: bool(s.is_active), sort_order: s.sort_order, version: s.version })),
     settings: {
       public_show_estimates: w.settings.public_show_estimates === '1',
-      public_show_capacity: w.settings.public_show_capacity === '1',
-      planning_horizon: Number(w.settings.planning_horizon || 3),
     },
     viewer,
   };

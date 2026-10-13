@@ -72,6 +72,61 @@ export interface SheetFetchResult {
   available: string[];
   data: Record<string, string[][]>; // sheet name → rows
   mode: 'service_account' | 'public_link';
+  /** sheet name → grid of URLs hidden behind cell text (only the requested link columns; service account only) */
+  hyperlinks?: Record<string, string[][]>;
+}
+
+const normHeader = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+function colLetter(i: number): string {
+  let n = i + 1;
+  let out = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    out = String.fromCharCode(65 + m) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+interface GridCell {
+  hyperlink?: string;
+  textFormatRuns?: { format?: { link?: { uri?: string } } }[];
+  chipRuns?: { chip?: { richLinkProperties?: { uri?: string } } }[];
+}
+
+/**
+ * Hyperlinks hidden behind the text of the given columns (Google Sheets metadata only — nothing behind a link is
+ * ever requested). Cell-level links, rich-text links and smart chips are read. Older API deployments may not know
+ * `chipRuns`; then the request is repeated without it.
+ */
+async function fetchHyperlinks(env: Env, token: string, spreadsheetId: string, sheet: string, columns: number[]): Promise<string[][]> {
+  const grid: string[][] = [];
+  if (!columns.length) return grid;
+  const ranges = columns.map((c) => `ranges=${encodeURIComponent(`'${sheet.replace(/'/g, "''")}'!${colLetter(c)}:${colLetter(c)}`)}`).join('&');
+  const fields = (chips: boolean) =>
+    `sheets(data(startRow,startColumn,rowData(values(hyperlink,textFormatRuns(format(link(uri)))${chips ? ',chipRuns(chip(richLinkProperties(uri)))' : ''}))))`;
+  const url = (chips: boolean) => `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${ranges}&includeGridData=true&fields=${encodeURIComponent(fields(chips))}`;
+  let res = await googleGet(env, url(true), token);
+  if (res.status === 400) res = await googleGet(env, url(false), token);
+  if (!res.ok) throw new HttpError(502, 'google_unavailable', `Не удалось прочитать гиперссылки листа «${sheet}» (HTTP ${res.status}). Данные в системе не изменены.`);
+  const body = (await res.json()) as { sheets?: { data?: { startRow?: number; startColumn?: number; rowData?: { values?: GridCell[] }[] }[] }[] };
+  for (const d of body.sheets?.[0]?.data ?? []) {
+    const r0 = d.startRow ?? 0;
+    const c0 = d.startColumn ?? 0;
+    (d.rowData ?? []).forEach((row, ri) => {
+      (row.values ?? []).forEach((cell, ci) => {
+        const uris = new Set<string>();
+        if (cell.hyperlink) uris.add(cell.hyperlink);
+        for (const run of cell.textFormatRuns ?? []) if (run.format?.link?.uri) uris.add(run.format.link.uri);
+        for (const run of cell.chipRuns ?? []) if (run.chip?.richLinkProperties?.uri) uris.add(run.chip.richLinkProperties.uri);
+        if (!uris.size) return;
+        const r = r0 + ri;
+        const c = c0 + ci;
+        (grid[r] ??= [])[c] = [...uris].join('\n');
+      });
+    });
+  }
+  return grid;
 }
 
 async function googleGet(env: Env, url: string, token: string | null) {
@@ -89,7 +144,7 @@ async function googleGet(env: Env, url: string, token: string | null) {
  * Reads the given sheets. Missing sheets are reported in `available` (not an error by themselves).
  * Without a service account only spreadsheets shared "anyone with the link can view" can be read.
  */
-export async function fetchSpreadsheet(env: Env, spreadsheetId: string, sheetNames: string[]): Promise<SheetFetchResult> {
+export async function fetchSpreadsheet(env: Env, spreadsheetId: string, sheetNames: string[], opts: { linkColumns?: Record<string, string[]> } = {}): Promise<SheetFetchResult> {
   const sa = serviceAccount(env);
   if (sa) {
     const token = await accessToken(env, sa);
@@ -115,7 +170,14 @@ export async function fetchSpreadsheet(env: Env, spreadsheetId: string, sheetNam
         data[wanted[i]] = (vr.values ?? []).map((r) => r.map((c) => (c === null || c === undefined ? '' : String(c))));
       });
     }
-    return { title: meta.properties?.title ?? null, available, data, mode: 'service_account' };
+    // URLs hidden behind cell text, only for the columns the source maps to links
+    const hyperlinks: Record<string, string[][]> = {};
+    for (const [sheet, headers] of Object.entries(opts.linkColumns ?? {})) {
+      const head = (data[sheet]?.[0] ?? []).map((h) => normHeader(h));
+      const wantedCols = [...new Set(headers.map(normHeader))].flatMap((h) => head.flatMap((x, i) => (x === h ? [i] : [])));
+      if (wantedCols.length) hyperlinks[sheet] = await fetchHyperlinks(env, token, spreadsheetId, sheet, wantedCols);
+    }
+    return { title: meta.properties?.title ?? null, available, data, mode: 'service_account', hyperlinks };
   }
 
   // Public-link fallback (CSV export of each sheet)
@@ -149,6 +211,14 @@ export const EXPORT_SHEET = 'Import';
  * strings / numbers (userEnteredValue.stringValue), so nothing is interpreted as a formula.
  */
 export async function writeImportTab(env: Env, spreadsheetId: string, rows: (string | number | null | undefined)[][]): Promise<{ sheetTitle: string }> {
+  return writeTab(env, spreadsheetId, rows, EXPORT_SHEET, false);
+}
+
+/**
+ * Same as writeImportTab for any tab title. With `create`, a missing tab is added in the same batchUpdate
+ * (vNext export builder: a template writes to its own tab «Экспорт — <name>»). Other tabs are never addressed.
+ */
+export async function writeTab(env: Env, spreadsheetId: string, rows: (string | number | null | undefined)[][], title: string, create: boolean): Promise<{ sheetTitle: string }> {
   const sa = serviceAccount(env);
   if (!sa) throw new HttpError(400, 'no_service_account', 'Сервисный аккаунт Google не настроен (секрет GOOGLE_SERVICE_ACCOUNT_JSON)');
   const token = await accessToken(env, sa, WRITE_SCOPE);
@@ -160,14 +230,20 @@ export async function writeImportTab(env: Env, spreadsheetId: string, rows: (str
   }
   if (!meta.ok) throw new HttpError(502, 'google_unavailable', `Google Sheets ответил HTTP ${meta.status}. Таблица не изменена.`);
   const info = (await meta.json()) as { sheets?: { properties: { sheetId: number; title: string; gridProperties?: { rowCount?: number; columnCount?: number } } }[] };
-  const tab = (info.sheets ?? []).find((x) => x.properties.title === EXPORT_SHEET);
-  if (!tab) throw new HttpError(400, 'google_no_import_tab', `В таблице нет вкладки «${EXPORT_SHEET}». Создайте её — другие вкладки экспорт не трогает.`);
-  const sheetId = tab.properties.sheetId;
+  const tab = (info.sheets ?? []).find((x) => x.properties.title === title);
+  if (!tab && !create) throw new HttpError(400, 'google_no_import_tab', `В таблице нет вкладки «${title}». Создайте её — другие вкладки экспорт не трогает.`);
   const width = Math.max(1, ...rows.map((r) => r.length));
   const needRows = rows.length + 1;
-  const grid = tab.properties.gridProperties ?? {};
   const requests: unknown[] = [];
-  if ((grid.rowCount ?? 0) < needRows || (grid.columnCount ?? 0) < width) {
+  let sheetId: number;
+  if (!tab) {
+    const taken = new Set((info.sheets ?? []).map((x) => x.properties.sheetId));
+    sheetId = 1_000_000 + Math.floor(Math.random() * 1_000_000_000);
+    while (taken.has(sheetId)) sheetId++;
+    requests.push({ addSheet: { properties: { sheetId, title, gridProperties: { rowCount: Math.max(1000, needRows), columnCount: Math.max(26, width), frozenRowCount: 1 } } } });
+  } else sheetId = tab.properties.sheetId;
+  const grid = tab?.properties.gridProperties ?? { rowCount: Math.max(1000, needRows), columnCount: Math.max(26, width) };
+  if (tab && ((grid.rowCount ?? 0) < needRows || (grid.columnCount ?? 0) < width)) {
     requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: Math.max(grid.rowCount ?? 0, needRows), columnCount: Math.max(grid.columnCount ?? 0, width) } }, fields: 'gridProperties(rowCount,columnCount)' } });
   }
   requests.push({ updateCells: { range: { sheetId }, fields: 'userEnteredValue' } }); // clear the whole tab
@@ -187,5 +263,5 @@ export async function writeImportTab(env: Env, spreadsheetId: string, rows: (str
   });
   if (res.status === 403) throw new HttpError(400, 'google_no_access', `Сервисному аккаунту ${sa.client_email} нужна роль «Редактор» в таблице экспорта.`);
   if (!res.ok) throw new HttpError(502, 'google_write_failed', `Google Sheets не принял данные (HTTP ${res.status}). Изменение отменено целиком.`);
-  return { sheetTitle: EXPORT_SHEET };
+  return { sheetTitle: title };
 }

@@ -77,7 +77,7 @@ export function registerMergeRoutes(r: Router) {
     const counts = {
       comments: (await all(db, 'SELECT COUNT(*) AS n FROM comments WHERE feature_id = ?', a.source.id))[0].n,
       sources: (await all(db, `SELECT COUNT(*) AS n FROM source_entity_links WHERE entity_type = 'feature' AND entity_id = ?`, a.source.id))[0].n,
-      offers: (await all(db, 'SELECT COUNT(*) AS n FROM feature_offers WHERE feature_id = ?', a.source.id))[0].n,
+      links: (await all(db, 'SELECT COUNT(*) AS n FROM feature_links WHERE feature_id = ?', a.source.id))[0].n,
       relations_moved: a.newRelations.filter((x) => x.action === 'update').length,
       relations_dropped: a.newRelations.filter((x) => x.action === 'delete').length,
     };
@@ -136,16 +136,20 @@ export function registerMergeRoutes(r: Router) {
       if (nr.action === 'delete') st.push(stmt(db, 'DELETE FROM feature_relations WHERE id = ?', nr.rel.id));
       else st.push(stmt(db, 'UPDATE feature_relations SET from_id = ?, to_id = ? WHERE id = ?', nr.from, nr.to, nr.rel.id));
     }
-    // offers, tags, comments, import sources, release membership
-    st.push(stmt(db, 'INSERT OR IGNORE INTO feature_offers (feature_id, offer_id, created_at, created_by) SELECT ?, offer_id, created_at, created_by FROM feature_offers WHERE feature_id = ?', T, S));
-    st.push(stmt(db, 'DELETE FROM feature_offers WHERE feature_id = ?', S));
+    // tags, comments, import sources, release membership
+    // proposals delivered by the duplicate are now delivered by the main card
+    st.push(stmt(db, 'INSERT OR IGNORE INTO proposal_features (proposal_id, feature_id, created_at, created_by) SELECT proposal_id, ?, created_at, created_by FROM proposal_features WHERE feature_id = ?', T, S));
+    st.push(stmt(db, 'DELETE FROM proposal_features WHERE feature_id = ?', S));
+    // external links: moved to the main card; a URL it already has is not duplicated
+    st.push(stmt(db, `UPDATE feature_links SET feature_id = ? WHERE feature_id = ? AND url NOT IN (SELECT url FROM feature_links WHERE feature_id = ?)`, T, S, T));
+    st.push(stmt(db, 'DELETE FROM feature_links WHERE feature_id = ?', S));
     st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) SELECT ?, tag FROM feature_tags WHERE feature_id = ?', T, S));
     st.push(stmt(db, 'UPDATE comments SET feature_id = ?, moved_from = COALESCE(moved_from, ?) WHERE feature_id = ?', T, S, S));
     st.push(stmt(db, `UPDATE source_entity_links SET entity_id = ?, updated_at = ? WHERE entity_type = 'feature' AND entity_id = ?`, T, now, S));
     st.push(stmt(db, `UPDATE release_features SET feature_id = ? WHERE feature_id = ? AND NOT EXISTS (SELECT 1 FROM release_features WHERE feature_id = ?)`, T, S, T));
     st.push(stmt(db, 'DELETE FROM release_features WHERE feature_id = ?', S));
     // the source card stays (old links resolve to the target) and records the duplicate relation
-    st.push(stmt(db, 'UPDATE features SET merged_into_id = ?, period_id = NULL, placement_locked = 0, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', T, now, user.id, S));
+    st.push(stmt(db, 'UPDATE features SET merged_into_id = ?, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', T, now, user.id, S));
     st.push(stmt(db, 'INSERT OR IGNORE INTO feature_relations (id, type, from_id, to_id, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)', newId('rel'), 'duplicate_of', S, T, now, user.id));
     st.push(stmt(db, 'UPDATE features SET updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?', now, user.id, T));
     st.push(auditStmt(db, user, 'feature', S, 'merged_into', [{ field: 'merged_into', old: null, new: `RF-${a.target.number}` }]));

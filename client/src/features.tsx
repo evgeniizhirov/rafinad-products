@@ -1,4 +1,4 @@
-// Shared feature widgets: form, vote picker, placement control, feature picker.
+// Shared feature widgets: form, vote picker, feature picker.
 import { useMemo, useState } from 'react';
 import { I } from './icons';
 import { api, ApiError, invalidate, mutate, openFeature, toast, useApi, useApp, useClickOutside, useDebounced, useDict } from './lib';
@@ -45,7 +45,7 @@ export function FeatureCard({ f, draggable, onDragStart, onDragEnd, warn, extra 
   const [dragging, setDragging] = useState(false);
   return (
     <div
-      className={`card ${dragging ? 'dragging' : ''} ${warn ? 'warn' : ''} ${f.placement_locked ? 'locked' : ''}`}
+      className={`card ${dragging ? 'dragging' : ''} ${warn ? 'warn' : ''}`}
       draggable={draggable}
       onDragStart={(e) => { setDragging(true); e.dataTransfer.setData('text/plain', f.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(e); }}
       onDragEnd={() => { setDragging(false); onDragEnd?.(); }}
@@ -64,7 +64,6 @@ export function FeatureCard({ f, draggable, onDragStart, onDragEnd, warn, extra 
       <div className="meta">
         <StatusPill status={f.status} />
         {f.estimate_total != null && <span className="num">{f.estimate_total} ч</span>}
-        {f.placement_locked && <span title="Размещение утверждено"><I.lock style={{ width: 13, height: 13, verticalAlign: '-2px' }} /></span>}
         {f.release && <span className="ellipsis" style={{ maxWidth: 140 }}>{f.release.version_label ?? f.release.name}</span>}
         <VisBadge v={f.visibility !== 'public' ? f.visibility : undefined} />
       </div>
@@ -119,50 +118,11 @@ export function VoteControl({ feature, dept, vote }: { feature: any; dept: any; 
   );
 }
 
-// ───────────────── placement (planning period) ─────────────────
-export function usePlacement() {
-  const [pending, setPending] = useState<{ feature: any; periodId: string | null; overload: any[] } | null>(null);
-  const move = async (feature: any, periodId: string | null, extra: Record<string, unknown> = {}) => {
-    try {
-      await api(`/features/${feature.id}/placement`, { method: 'PATCH', body: { period_id: periodId, version: feature.version, ...extra } });
-      invalidate();
-      toast(periodId ? `${feature.key} перенесена` : `${feature.key} снята с плана`);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'overload') setPending({ feature, periodId, overload: e.details?.overload ?? [] });
-      else {
-        toast((e as Error).message, 'error');
-        invalidate();
-      }
-    }
-  };
-  const modal = pending && (
-    <ReasonModal
-      title="Превышение доступных часов"
-      confirmText="Перенести с превышением"
-      onClose={() => setPending(null)}
-      onConfirm={async (reason) => {
-        const p = pending;
-        setPending(null);
-        await move(p.feature, p.periodId, { confirm_overload: true, reason });
-      }}
-    >
-      <p>После переноса {pending.feature.key} не хватит часов:</p>
-      <ul style={{ margin: 0, paddingLeft: 18 }}>
-        {pending.overload.map((o) => (
-          <li key={o.teamId}><b>{o.team_name}</b>: будет {o.plannedAfter} ч при ёмкости {o.capacity} ч (дефицит {o.over} ч)</li>
-        ))}
-      </ul>
-    </ReasonModal>
-  );
-  return { move, modal };
-}
-
 // ───────────────── feature form (create / edit) ─────────────────
 export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onClose: () => void; defaults?: Record<string, any> }) {
   const { meta } = useApp();
   const d = useDict();
   const epics = useApi<any>('/epics');
-  const offers = useApi<any>('/offers');
   const [v, setV] = useState<Record<string, any>>(() => ({
     title: feature?.title ?? '',
     description: feature?.description ?? '',
@@ -178,7 +138,6 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     planned_end: feature?.planned_end ?? '',
     external_ref: feature?.external_ref ?? '',
     tags: (feature?.tags ?? []).join(', '),
-    offer_ids: (feature?.offers ?? []).map((o: any) => o.id),
     private_notes: feature?.private_notes ?? '',
     task_kind: feature?.task_kind ?? 'planned',
     is_product_internal: !!feature?.is_product_internal,
@@ -202,7 +161,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       title: v.title.trim(), description: v.description, category_id: nul(v.category_id), epic_id: nul(v.epic_id), status_id: v.status_id,
       stage_id: nul(v.stage_id), visibility: v.visibility, author_name: nul(v.author_name.trim()), assignee_name: nul(v.assignee_name.trim()),
       requested_at: nul(v.requested_at), planned_start: nul(v.planned_start), planned_end: nul(v.planned_end), external_ref: nul(v.external_ref.trim()),
-      tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), offer_ids: v.offer_ids, private_notes: nul(v.private_notes),
+      tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), private_notes: nul(v.private_notes),
       task_kind: v.task_kind, is_product_internal: v.is_product_internal,
       is_focus: v.task_kind === 'planned' && !v.is_product_internal ? v.is_focus : false,
       ...(v.task_kind !== 'planned' || feature?.urgency || feature?.fact_hours != null
@@ -345,20 +304,6 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
             <Field label="Факт часов" hint="Заполняется после устранения, только для аналитики"><input className="input" inputMode="decimal" value={v.fact_hours} onChange={set('fact_hours')} /></Field>
           </>
         )}
-        <Field label="Связанные офферы" span2>
-          <div className="row wrap" style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: 8, gap: 6 }}>
-            {(offers.data?.offers ?? []).map((o: any) => (
-              <label key={o.id} className="check" style={{ width: 'calc(50% - 6px)', minWidth: 220 }}>
-                <input
-                  type="checkbox"
-                  checked={v.offer_ids.includes(o.id)}
-                  onChange={(e) => setV((s) => ({ ...s, offer_ids: e.target.checked ? [...s.offer_ids, o.id] : s.offer_ids.filter((x: string) => x !== o.id) }))}
-                />
-                <span className="ellipsis">{o.external_code ? `${o.external_code} ` : ''}{o.name}</span>
-              </label>
-            ))}
-          </div>
-        </Field>
         <Field label="Приватные заметки" hint="Видны только продуктовой команде и администраторам" span2>
           <textarea className="textarea" rows={2} value={v.private_notes} onChange={set('private_notes')} />
         </Field>
@@ -368,7 +313,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
 }
 
 // ───────────────── feature picker ─────────────────
-export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти задачу по номеру или названию' }: { onPick: (f: any) => void; exclude?: string[]; placeholder?: string }) {
+export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти задачу по номеру или названию', autoFocus = true }: { onPick: (f: any) => void; exclude?: string[]; placeholder?: string; autoFocus?: boolean }) {
   const [q, setQ] = useState('');
   const dq = useDebounced(q, 200);
   const res = useApi<any>(dq.trim().length >= 1 ? `/features?q=${encodeURIComponent(dq.trim())}&sort=number&internal=all` : null);
@@ -377,7 +322,7 @@ export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти 
     <div className="stack tight">
       <div className="search">
         <I.search />
-        <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} autoFocus />
+        <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} autoFocus={autoFocus} />
       </div>
       {dq && (
         <div className="panel" style={{ maxHeight: 280, overflowY: 'auto' }}>

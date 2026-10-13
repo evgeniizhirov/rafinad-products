@@ -7,14 +7,15 @@ import { AcceptInvite, Account, Login } from './pages/Auth';
 import { Backlog } from './pages/Backlog';
 import { Epics } from './pages/Epics';
 import { FeatureDrawer } from './pages/FeatureDrawer';
-import { OfferDetail, Offers } from './pages/Offers';
+import { ExportBuilder } from './pages/Export';
 import { Overview } from './pages/Overview';
+import { Planner } from './pages/Planner';
 import { Priorities } from './pages/Priorities';
 import { ReleaseDetail, Releases } from './pages/Releases';
 import { Calendar } from './pages/Calendar';
 import { Analytics } from './pages/Analytics';
+import { ProposalDetail, Proposals } from './pages/Proposals';
 import { Budget } from './pages/Budget';
-import { Roadmap } from './pages/Roadmap';
 import { Sync } from './pages/Sync';
 import { Avatar, Empty, Loading, Toasts } from './ui';
 import './styles.css';
@@ -30,14 +31,15 @@ function Link({ to, children, className, onClick }: { to: string; children: Reac
 const NAV = [
   { to: '/', label: 'Обзор', icon: I.overview },
   { to: '/backlog', label: 'Бэклог', icon: I.backlog },
+  { to: '/proposals', label: 'Предложения', icon: I.idea, member: true },
   { to: '/epics', label: 'Эпики', icon: I.epics },
-  { to: '/offers', label: 'Офферы', icon: I.offers },
   { to: '/priorities', label: 'Приоритеты', icon: I.priorities },
-  { to: '/roadmap', label: 'Роадмап', icon: I.roadmap },
   { to: '/releases', label: 'Релизы', icon: I.releases },
   { to: '/calendar', label: 'Спринты', icon: I.calendar },
+  { to: '/planner', label: 'Планировщик', icon: I.board, plan: true },
   { to: '/budget', label: 'Бюджет', icon: I.priorities, plan: true },
   { to: '/analytics', label: 'Аналитика', icon: I.analytics, member: true },
+  { to: '/export', label: 'Экспорт', icon: I.sheet, member: true },
 ];
 
 function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNavigate: () => void }) {
@@ -81,6 +83,14 @@ function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNav
   );
 }
 
+/** an old bookmark (e.g. /roadmap) lands on the page that replaced it */
+function Retired({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to, true);
+  }, [to]);
+  return null;
+}
+
 function Routes() {
   const { path } = useLocation();
   const seg = path.split('/').filter(Boolean);
@@ -88,13 +98,15 @@ function Routes() {
   switch (seg[0]) {
     case 'backlog': return <Backlog />;
     case 'epics': return <Epics />;
-    case 'offers': return seg[1] ? <OfferDetail id={seg[1]} /> : <Offers />;
     case 'priorities': return <Priorities />;
-    case 'roadmap': return <Roadmap />;
+    case 'roadmap': return <Retired to="/" />; // v2-10: the roadmap by planning periods was removed — the Gantt is in «Обзор»
     case 'releases': return seg[1] ? <ReleaseDetail id={seg[1]} /> : <Releases />;
     case 'calendar': return <Calendar />;
     case 'budget': return <Budget />;
+    case 'planner': return <Planner />;
+    case 'export': return <ExportBuilder />;
     case 'analytics': return <Analytics />;
+    case 'proposals': return seg[1] ? <ProposalDetail id={seg[1]} /> : <Proposals />;
     case 'sync': return <Sync />;
     case 'admin': return <Admin />;
     case 'account': return <Account />;

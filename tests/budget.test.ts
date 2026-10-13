@@ -123,7 +123,11 @@ describe('budget API', () => {
     const r81 = rep.sprints.find((s: any) => s.code === '8.1');
     assert.equal(r81.load[be], 10);
     assert.equal(r81.capacity[be], 15);
-    app.many("UPDATE sprints SET status = 'closed' WHERE id = ? RETURNING 1", s81.id);
+    // a task that adds no hours to the overloaded team never needs a confirmation
+    assert.equal((await app.call('PATCH', `/api/features/${c}/schedule`, { sprint_id: s81.id, version: 1, confirm_over_budget: true, reason: 'Согласовано' }, pm)).status, 200, 'now 8.1 is over: 20 h of 15');
+    const noHours = (await app.call('POST', '/api/features', { title: 'Без часов' }, pm)).body.id;
+    assert.equal((await app.call('PATCH', `/api/features/${noHours}/schedule`, { sprint_id: s81.id, version: 1 }, pm)).status, 200);
+        app.many("UPDATE sprints SET status = 'closed' WHERE id = ? RETURNING 1", s81.id);
     assert.equal((await app.call('PUT', '/api/planning/sprint-capacity', { sprint_id: s81.id, team_id: be, hours: 99 }, pm)).status, 409);
   });
 

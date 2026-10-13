@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
-import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
+import { ExternalLinks } from './ExternalLinks';
+import { PhasePanel } from './Phases';
+import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, VoteControl } from '../features';
 import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
 import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
+import { PurgeButton } from './Purge';
 
 type Tab = 'about' | 'priority' | 'resources' | 'links' | 'history';
 
@@ -53,6 +56,7 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
           <VisBadge v={f.visibility} />
           <span className="grow" />
           {canEdit && <button className="btn sm" onClick={() => setEditing(true)}>Редактировать</button>}
+          <PurgeButton kind="feature" refKey={f.key} small onDone={close} />
           <button className="btn ghost icon sm" onClick={close} aria-label="Закрыть"><I.x /></button>
         </div>
         <h2 className="drawer-title">{f.title}</h2>
@@ -64,7 +68,7 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
             { id: 'about', label: 'Описание' },
             { id: 'priority', label: 'Приоритеты', n: f.priority.voters },
             { id: 'resources', label: 'Ресурсы' },
-            { id: 'links', label: 'Связи', n: Object.values(f.relations).flat().length + f.offers.length || null },
+            { id: 'links', label: 'Связи', n: Object.values(f.relations).flat().length || null },
             ...(f.history ? [{ id: 'history' as Tab, label: 'История' }] : []),
           ]}
         />
@@ -100,12 +104,6 @@ function About({ f }: { f: any }) {
         <dt>Категория</dt>
         <dd>{f.category?.name ?? <span className="muted">—</span>}</dd>
         {f.tags.length > 0 && (<><dt>Теги</dt><dd className="row wrap">{f.tags.map((t: string) => <span key={t} className="tag">{t}</span>)}</dd></>)}
-        {((f.task_kind ?? 'planned') === 'planned' || f.period) && (
-          <>
-            <dt>Плановый период</dt>
-            <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
-          </>
-        )}
         <dt>Релиз → спринт</dt>
         <dd>
           {f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}
@@ -147,6 +145,8 @@ function About({ f }: { f: any }) {
         {f.external_ref && (<><dt>Внешний ID</dt><dd>{f.external_ref}</dd></>)}
         {f.sources?.length > 0 && (<><dt>Источники импорта</dt><dd>{f.sources.map((s: any) => <div key={s.source_id + s.external_id}>{s.source_name}: {s.external_id}</div>)}</dd></>)}
       </dl>
+      <PhasePanel f={f} />
+      {f.links !== undefined && <ExternalLinks f={f} canEdit={canEditCard} />}
       {f.private_notes && (
         <div className="notice warn"><I.lock /><div><b>Приватная заметка.</b> <span className="pre">{f.private_notes}</span></div></div>
       )}
@@ -216,7 +216,6 @@ function Resources({ f }: { f: any }) {
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
   const canPlan = !!me?.permissions.plan && !me.must_change_password;
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const { move, modal } = usePlacement();
   useEffect(() => {
     setDraft({});
   }, [f.version, JSON.stringify(f.estimates)]);
@@ -280,26 +279,6 @@ function Resources({ f }: { f: any }) {
         </div>
       )}
       <ScheduleSection f={f} canEdit={canEdit} />
-      <section className="stack">
-        <h3 style={{ fontSize: 15 }}>Плановый период</h3>
-        {canPlan ? (
-          <div className="row wrap">
-            <select className="select" style={{ maxWidth: 260 }} value={f.period?.id ?? ''} onChange={(e) => move(f, e.target.value || null)}>
-              <option value="">Не запланирована</option>
-              {meta.periods.filter((p) => p.is_active).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            {f.period && (
-              <label className="check">
-                <input type="checkbox" checked={f.placement_locked} onChange={(e) => move(f, f.period.id, { lock: e.target.checked })} />
-                Размещение утверждено (планировщик его не двигает)
-              </label>
-            )}
-          </div>
-        ) : (
-          <p>{f.period ? f.period.name : <span className="muted">Не запланирована</span>}</p>
-        )}
-      </section>
-      {modal}
     </div>
   );
 }
@@ -464,11 +443,21 @@ function Links({ f }: { f: any }) {
   const [merging, setMerging] = useState(false);
   const remove = canEdit ? (id: string) => mutate(`/relations/${id}`, 'DELETE', undefined, 'Связь удалена') : undefined;
   const r = f.relations;
-  const empty = !Object.values(r).flat().length && !f.offers.length;
+  const empty = !Object.values(r).flat().length && !f.proposals?.length;
   return (
     <div className="stack loose">
       <BusinessBlockers f={f} canEdit={canEdit} />
-      {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку, связанную задачу или оффер.' : null}</Empty>}
+      {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку или связанную задачу.' : null}</Empty>}
+      {f.proposals?.length > 0 && (
+        <div className="stack tight">
+          <div className="small muted">Реализует предложения</div>
+          {f.proposals.map((p: any) => (
+            <a key={p.id} href={`/proposals/${p.key}`} onClick={(e) => { e.preventDefault(); navigate(`/proposals/${p.key}`); }} className="row" style={{ padding: '2px 0', gap: 6 }}>
+              <I.idea style={{ width: 15, height: 15, color: 'var(--ink-3)' }} /><span className="key">{p.key}</span><span>{p.title}</span>
+            </a>
+          ))}
+        </div>
+      )}
       <RefList title="Блокирует" items={r.blocks} onRemove={remove} />
       <RefList title="Заблокирована задачами" items={r.blocked_by} onRemove={remove} />
       <RefList title="Связанные задачи" items={r.related} onRemove={remove} />
@@ -478,17 +467,6 @@ function Links({ f }: { f: any }) {
         <div className="stack tight">
           <div className="small muted">Объединённые дубли</div>
           {f.merged_duplicates.map((m: any) => <div key={m.id} className="row small"><span className="key">{m.key}</span>{m.title}</div>)}
-        </div>
-      )}
-      {f.offers.length > 0 && (
-        <div className="stack tight">
-          <div className="small muted">Влияет на офферы</div>
-          {f.offers.map((o: any) => (
-            <a key={o.id} href={`/offers/${o.id}`} onClick={(e) => { e.preventDefault(); navigate(`/offers/${o.id}`); }} className="row" style={{ padding: '4px 0' }}>
-              <I.offers style={{ width: 15, height: 15, color: 'var(--ink-3)' }} />
-              <span>{o.external_code && <span className="key">{o.external_code} </span>}{o.name}</span>
-            </a>
-          ))}
         </div>
       )}
       {canEdit && (
@@ -540,7 +518,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
     >
       {!target ? (
         <div className="stack">
-          <p>Выберите основную карточку. {f.key} станет её дублем: связи, офферы, комментарии, источники импорта и история перейдут в основную, старая ссылка продолжит работать.</p>
+          <p>Выберите основную карточку. {f.key} станет её дублем: связи, внешние ссылки, комментарии, источники импорта и история перейдут в основную, старая ссылка продолжит работать.</p>
           <FeaturePicker exclude={[f.id]} onPick={setTarget} />
         </div>
       ) : !p ? (
@@ -571,7 +549,7 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
               ))}
             </section>
           )}
-          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), офферы ({p.counts.offers}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
+          <p className="small muted">Перейдут: комментарии ({p.counts.comments}), внешние ссылки ({p.counts.links ?? 0}), источники импорта ({p.counts.sources}), связи ({p.counts.relations_moved}). Повторяющиеся связи будут убраны ({p.counts.relations_dropped}).</p>
           <button className="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => setTarget(null)}>Выбрать другую карточку</button>
         </div>
       )}
@@ -582,13 +560,16 @@ function MergeDialog({ f, onClose }: { f: any; onClose: () => void }) {
 const ACTIONS: Record<string, string> = {
   created: 'создал(а) карточку', updated: 'изменил(а)', estimates_changed: 'изменил(а) оценки', vote: 'проголосовал(а)', vote_admin_override: 'изменил(а) оценку отдела (админ)',
   moved: 'перенёс(ла) в другой период', moved_over_capacity: 'перенёс(ла) с превышением лимита', plan_approved: 'утвердил(а) размещение по плану',
+  phase_changed: 'перевёл(а) на этап', phase_fact_corrected: 'исправил(а) дату этапа', phase_forecast: 'задал(а) прогноз этапа', baseline_captured: 'зафиксирован исходный план', baseline_revised: 'пересмотрел(а) исходный план',
+  proposal_linked: 'связал(а) с предложением', proposal_unlinked: 'убрал(а) связь с предложением', import_links: 'обновил(а) ссылки из импорта',
+  link_added: 'добавил(а) внешнюю ссылку', link_changed: 'изменил(а) внешнюю ссылку', link_removed: 'удалил(а) внешнюю ссылку',
   relation_added: 'добавил(а) связь', relation_removed: 'удалил(а) связь', comment_added: 'оставил(а) комментарий', merged_into: 'объединил(а) с другой карточкой',
   merged_from: 'присоединил(а) дубль', import_created: 'создано импортом', import_updated: 'обновлено импортом', import_linked: 'привязан источник импорта', import_relation: 'связь из импорта',
 };
 
 const FIELD: Record<string, string> = {
   title: 'название', description: 'описание', status_id: 'статус', stage_id: 'этап', category_id: 'категория', epic_id: 'эпик', visibility: 'публикация',
-  period_id: 'период', placement_locked: 'фиксация', closed_at: 'дата завершения', tags: 'теги', offers: 'офферы', author_name: 'автор', assignee_name: 'ответственный',
+  period_id: 'период', placement_locked: 'фиксация', closed_at: 'дата завершения', tags: 'теги', offers: 'офферы (раздел удалён)', author_name: 'автор', assignee_name: 'ответственный',
   requested_at: 'дата постановки', planned_start: 'плановое начало', planned_end: 'плановое завершение', private_notes: 'заметки', external_ref: 'внешний ID',
   task_kind: 'тип работы', is_product_internal: 'внутренняя задача продукта', initiator: 'инициатор', initiator_type: 'вид инициатора', initiator_name: 'инициатор',
   initiator_user_id: 'инициатор (пользователь)', initiator_department_id: 'инициатор (отдел)',
@@ -602,7 +583,7 @@ function History({ f }: { f: any }) {
     if (field === 'status_id') return meta.statuses.find((s) => s.id === v)?.name ?? v;
     if (field === 'stage_id') return meta.stages.find((s) => s.id === v)?.name ?? v;
     if (field === 'category_id') return meta.categories.find((s) => s.id === v)?.name ?? v;
-    if (field === 'period_id') return meta.periods.find((s) => s.id === v)?.name ?? v;
+    if (field === 'period_id') return v ? 'плановый период (удалён)' : v;
     if (field === 'placement_locked') return v ? 'да' : 'нет';
     if (field === 'description' || field === 'private_notes') return String(v).length > 80 ? `${String(v).slice(0, 80)}…` : String(v);
     if (Array.isArray(v)) return v.join(', ') || '—';

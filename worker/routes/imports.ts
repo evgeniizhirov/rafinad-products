@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { parseCsv, toCsv } from '../domain/csv';
 import { findCycle, type Edge } from '../domain/graph';
 import {
-  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceSheetNames, sourceValues, unresolvedReasons,
-  type ImportConfig, type ItemDraft, type Resolution, type SheetKey, type SheetsData, type Snapshot,
+  buildLookup, buildPreview, countItems, DEFAULT_IMPORT_CONFIG, linkPlanFor, resolveEpicExt, resolveMerged, SHEET_COLUMNS, SHEET_KEYS, sourceSheetNames, sourceValues, unresolvedReasons,
+  type ImportConfig, type ItemDraft, type Resolution, type SheetHyperlinks, type SheetKey, type SheetsData, type Snapshot,
 } from '../domain/importer';
 import { DEMO_SHEETS } from '../demoData';
+import { emptyPlan, linkSummary, type LinkPlan, type SourceLink } from '../domain/linkImport';
 import { BUGS_CONFIG, BUGS_SPREADSHEET_ID, IMPROVEMENTS_CONFIG, TASKFLOW_CONFIG } from '../domain/flatSheet';
 import { perms, requirePerm } from '../lib/auth';
 import { auditStmt, type Change } from '../lib/audit';
@@ -33,10 +34,13 @@ const flatSchema = z.object({
   fact_hours_as: z.enum(['description', 'field']).optional(),
   flags: z.record(colName, z.string().trim().min(1).max(40)).default({}),
   hours: z.record(colName, z.string().trim().min(1).max(40)).default({}),
+  links: z.record(colName, z.enum(['bitrix24', 'jira', 'docs', 'other'])).optional(),
+  links_from_text: z.boolean().optional(),
 });
 const configSchema = z.object({
   format: z.enum(['template', 'flat']).default('template'),
-  sheets: z.object({ epics: colName, features: colName, offers: colName, relations: colName }).default(DEFAULT_IMPORT_CONFIG.sheets),
+  // an «offers» key of a config saved before vNext is accepted and dropped
+  sheets: z.object({ epics: colName, features: colName, relations: colName }).default(DEFAULT_IMPORT_CONFIG.sheets),
   hoursColumns: z.record(colName, z.string().trim().min(1).max(40)).default({}),
   flat: flatSchema.optional(),
   newVisibility: z.enum(['draft', 'internal']).default('draft'),
@@ -65,12 +69,16 @@ async function getSource(ctx: Ctx, id: string) {
  * Reads the source. Never writes anything: a failing Google API leaves the backlog untouched.
  * `files` — a CSV export uploaded by the user instead of reading Google directly (key: sheet key or 'flat').
  */
-async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null }> {
+async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Promise<{ data: SheetsData; hash: string; notes: string[]; title: string | null; hyperlinks: SheetHyperlinks }> {
   const config = configOf(s);
   const wanted = sourceSheetNames(config);
   const data: SheetsData = {};
   const notes: string[] = [];
+  const hyperlinks: SheetHyperlinks = {};
   let title: string | null = null;
+  // columns whose hidden hyperlinks are read from Google (flat sources with link columns / links in text)
+  const flat = config.format === 'flat' ? config.flat : undefined;
+  const linkHeaders = flat ? [...Object.keys(flat.links ?? {}), ...(flat.links_from_text ? [flat.columns.title, flat.columns.description ?? ''] : [])].filter(Boolean) : [];
   if (files) {
     for (const w of wanted) {
       if (files[w.key]) data[w.key] = parseCsv(files[w.key]);
@@ -79,8 +87,10 @@ async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Pro
     title = 'Загруженная выгрузка';
   } else if (s.kind === 'google') {
     if (!s.spreadsheet_id) throw badRequest('Не указана таблица Google Sheets');
-    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, wanted.map((w) => w.name));
+    const res = await fetchSpreadsheet(ctx.env, s.spreadsheet_id, wanted.map((w) => w.name), { linkColumns: flat && linkHeaders.length ? { [flat.sheet]: linkHeaders } : {} });
     title = res.title;
+    if (flat && res.hyperlinks?.[flat.sheet]) hyperlinks.flat = res.hyperlinks[flat.sheet];
+    if (flat && linkHeaders.length && res.mode === 'public_link') notes.push('Гиперссылки, скрытые за текстом ячеек, читаются только через сервисный аккаунт — импортированы адреса, видимые в тексте');
     for (const w of wanted) {
       if (res.data[w.name]) data[w.key] = res.data[w.name];
       else notes.push(`Лист «${w.name}» не найден${res.available.length ? ` (есть: ${res.available.slice(0, 20).join(', ')})` : ''} — пропущен`);
@@ -94,7 +104,9 @@ async function readSource(ctx: Ctx, s: Row, files?: Record<string, string>): Pro
   }
   if (!Object.keys(data).length) throw badRequest('В источнике нет ни одного листа для импорта');
   const canonical = wanted.map((w) => [w.key, data[w.key] ?? null]);
-  return { data, hash: await sha256Hex(JSON.stringify(canonical)), notes, title };
+  // hidden hyperlinks are part of the source: a changed link makes an older preview stale
+  if (hyperlinks.flat) canonical.push(['flat:hyperlinks', hyperlinks.flat as any]);
+  return { data, hash: await sha256Hex(JSON.stringify(canonical)), notes, title, hyperlinks };
 }
 
 async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot> {
@@ -107,22 +119,23 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     q('SELECT entity_type, external_id, entity_id, last_values FROM source_entity_links WHERE source_id = ?', sourceId),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version FROM epics'),
     q('SELECT id, number, title, description, category_id, status_id, external_ref, version, merged_into_id, epic_id, stage_id, requested_at, assignee_name, planned_end, urgency, fact_hours FROM features'),
-    q('SELECT id, name AS title, description, category_id, status_id, external_code AS external_ref, version FROM offers'),
     q('SELECT type, from_id, to_id FROM feature_relations'),
-    q('SELECT feature_id, offer_id FROM feature_offers'),
     q('SELECT feature_id, team_id, hours, is_manual FROM feature_estimates'),
     q('SELECT feature_id, tag FROM feature_tags ORDER BY tag'),
     q('SELECT id, name FROM departments'),
     q('SELECT id, name FROM users WHERE is_active = 1'),
+    q('SELECT id, feature_id, kind, url, origin, source_id, locally_edited FROM feature_links'),
+    q('SELECT entity_type, external_id, entity_key, deleted_at FROM import_tombstones WHERE source_id = ?', sourceId),
+    q("SELECT key, value FROM app_settings WHERE key IN ('number_floor.features', 'number_floor.epics')"),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const est = new Map<string, Record<string, { hours: number; is_manual: number }>>();
-  for (const e of r(10)) {
+  for (const e of r(8)) {
     if (!est.has(e.feature_id)) est.set(e.feature_id, {});
     est.get(e.feature_id)![e.team_id] = { hours: e.hours, is_manual: e.is_manual };
   }
   const tagsBy = new Map<string, string[]>();
-  for (const t of r(11)) {
+  for (const t of r(9)) {
     if (!tagsBy.has(t.feature_id)) tagsBy.set(t.feature_id, []);
     tagsBy.get(t.feature_id)!.push(t.tag);
   }
@@ -134,11 +147,16 @@ async function loadSnapshot(db: D1Database, sourceId: string): Promise<Snapshot>
     links: r(4).map((l) => ({ ...l, last_values: parseJson(l.last_values, null) })) as Snapshot['links'],
     epics: r(5) as Snapshot['epics'],
     features: r(6).map((f) => ({ ...f, estimates: est.get(f.id) ?? {}, tags: tagsBy.get(f.id) ?? [] })) as Snapshot['features'],
-    offers: r(7) as Snapshot['offers'],
-    relations: r(8) as Snapshot['relations'],
-    featureOffers: r(9) as Snapshot['featureOffers'],
-    departments: r(12) as Snapshot['departments'],
-    users: r(13) as Snapshot['users'],
+    relations: r(7) as Snapshot['relations'],
+    departments: r(10) as Snapshot['departments'],
+    users: r(11) as Snapshot['users'],
+    featureLinks: r(12) as Snapshot['featureLinks'],
+    sourceId,
+    tombstones: r(13) as Snapshot['tombstones'],
+    numberFloors: {
+      features: Number(r(14).find((x) => x.key === 'number_floor.features')?.value ?? 0) || 0,
+      epics: Number(r(14).find((x) => x.key === 'number_floor.epics')?.value ?? 0) || 0,
+    },
   };
 }
 
@@ -168,6 +186,7 @@ async function runDto(ctx: Ctx, runId: string) {
     id: run.id, source_id: run.source_id, status: run.status, created_at: run.created_at, created_by: run.created_by_name, applied_at: run.applied_at,
     applied_by: run.applied_by_name, counts: parseJson(run.counts, null), error: run.error, source_hash: run.source_hash, origin: run.origin ?? 'source',
     summary: countItems(drafts),
+    links: linkSummary(drafts),
     unresolved: run.status === 'preview' ? unresolvedReasons(drafts) : [],
     items: items.map(itemDto),
   };
@@ -178,6 +197,7 @@ const resolutionSchema = z.object({
   targetId: z.string().optional(),
   fields: z.record(z.string(), z.enum(['source', 'local'])).optional(),
   protected: z.record(z.string(), z.boolean()).optional(),
+  links: z.object({ source: z.array(z.string().max(2000)).max(200).optional(), remove: z.array(z.string().max(2000)).max(200).optional() }).optional(),
 });
 
 function validateResolution(item: Row, res: Resolution) {
@@ -195,9 +215,12 @@ function validateResolution(item: Row, res: Resolution) {
   const diff = parseJson<{ field: string; kind: string }[]>(item.diff, []);
   for (const f of Object.keys(res.fields ?? {})) if (!diff.some((d) => d.field === f && d.kind !== 'protected')) throw badRequest(`Поле ${f} не участвует в изменениях`);
   for (const f of Object.keys(res.protected ?? {})) if (!diff.some((d) => d.field === f && d.kind === 'protected')) throw badRequest(`Поле ${f} не является защищённым`);
+  const plan = parseJson<Record<string, any>>(item.payload, {}).link_plan as LinkPlan | undefined;
+  for (const u of res.links?.source ?? []) if (!plan?.conflicts.some((c) => c.url === u)) throw badRequest(`Ссылка ${u} не в конфликте`);
+  for (const u of res.links?.remove ?? []) if (!plan?.missing.some((m) => m.url === u)) throw badRequest(`Ссылка ${u} не отмечена «нет в источнике»`);
 }
 
-const TABLE: Record<string, string> = { epic: 'epics', feature: 'features', offer: 'offers' };
+const TABLE: Record<string, string> = { epic: 'epics', feature: 'features' };
 
 /** Build every statement of the apply transaction. Pure planning over the current snapshot — no writes here. */
 async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], itemIds: string[], snap: Snapshot) {
@@ -206,7 +229,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   const L = buildLookup(snap);
   const now = nowIso();
   const lc = (s: string) => s.trim().toLowerCase();
-  const idFor: Record<string, Map<string, string>> = { epic: new Map(), feature: new Map(), offer: new Map() };
+  const idFor: Record<string, Map<string, string>> = { epic: new Map(), feature: new Map() };
   const st: D1PreparedStatement[] = [];
   const counts = { created: 0, updated: 0, unchanged: 0, linked: 0, skipped: 0, errors: 0, relations_created: 0, relations_skipped: 0, conflicts: [] as { row: string; field: string; choice: string }[] };
 
@@ -215,9 +238,9 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   st.push(abortIf(db, 'run_state', `NOT EXISTS (SELECT 1 FROM import_runs WHERE id = ? AND status = 'preview')`, run.id));
 
   // 1. decide final ids for every entity row
-  let nextFeature = Math.max(0, ...snap.features.map((f) => f.number ?? 0)) + 1;
-  let nextEpic = Math.max(0, ...snap.epics.map((f) => f.number ?? 0)) + 1;
-  const entityItems = drafts.filter((d) => d.entityType === 'epic' || d.entityType === 'offer' || d.entityType === 'feature');
+  let nextFeature = Math.max(snap.numberFloors?.features ?? 0, ...snap.features.map((f) => f.number ?? 0)) + 1;
+  let nextEpic = Math.max(snap.numberFloors?.epics ?? 0, ...snap.epics.map((f) => f.number ?? 0)) + 1;
+  const entityItems = drafts.filter((d) => d.entityType === 'epic' || d.entityType === 'feature');
   const plan = new Map<number, { mode: string; id: string | null; number?: number }>();
   for (const d of entityItems) {
     const res = d.resolution;
@@ -230,7 +253,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       idFor[d.entityType].set(ext, id);
       plan.set(d.seq, { mode: 'create', id, number });
     } else if (res.mode === 'link') {
-      const map = L.entities[d.entityType as 'epic' | 'feature' | 'offer'];
+      const map = L.entities[d.entityType as 'epic' | 'feature'];
       const target = resolveMerged(map, res.targetId!);
       if (!target) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: выбранная карточка не найдена`);
       idFor[d.entityType].set(ext, target.id);
@@ -240,7 +263,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       plan.set(d.seq, { mode: d.action === 'unchanged' ? 'unchanged' : 'update', id: d.targetId });
     }
   }
-  const resolveExt = (type: 'epic' | 'feature' | 'offer', ext: string | null): string | null => {
+  const resolveExt = (type: 'epic' | 'feature', ext: string | null): string | null => {
     if (!ext) return null;
     const mine = idFor[type].get(lc(ext));
     if (mine) return mine;
@@ -259,9 +282,53 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   const reason = `Импорт: ${source.name}`;
   const newVisibility = configOf(source).newVisibility === 'internal' ? 'internal' : 'draft';
   const today = now.slice(0, 10);
+  const linkCounts = { added: 0, updated: 0, removed: 0, kept_missing: 0, conflicts_local: 0, conflicts_source: 0 };
+  /**
+   * External links of one task row: the plan is recomputed here on fresh data (the preview only shows it).
+   * Manual links are never touched; INSERT OR IGNORE protects a URL added by hand between preview and apply.
+   */
+  const importLinks = (d: ItemDraft, featureId: string, isNew: boolean) => {
+    const links = d.payload.links as SourceLink[] | undefined;
+    if (!links) return;
+    const plan: LinkPlan = isNew ? { ...emptyPlan(), add: links } : linkPlanFor(snap, featureId, links);
+    const choice = d.resolution?.links ?? {};
+    const changes: Change[] = [];
+    const label = (kind: string, url: string) => `${kind}: ${url}`;
+    for (const a of plan.add) {
+      st.push(stmt(db, `INSERT OR IGNORE INTO feature_links (id, feature_id, kind, url, origin, source_id, source_column, created_at, created_by, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, 'import', ?, ?, ?, ?, ?, ?)`, newId('lnk'), featureId, a.kind, a.url, source.id, a.column, now, user.id, now, user.id));
+      changes.push({ field: 'link', old: null, new: label(a.kind, a.url) });
+      linkCounts.added++;
+    }
+    for (const u of plan.update) {
+      st.push(stmt(db, `UPDATE feature_links SET kind = ?, source_column = ?, updated_at = ?, updated_by = ?, version = version + 1
+        WHERE id = ? AND origin = 'import' AND locally_edited = 0`, u.to, u.column, now, user.id, u.id));
+      changes.push({ field: 'link', old: label(u.from, u.url), new: label(u.to, u.url) });
+      linkCounts.updated++;
+    }
+    for (const c of plan.conflicts) {
+      if (!(choice.source ?? []).includes(c.url)) {
+        linkCounts.conflicts_local++;
+        counts.conflicts.push({ row: `${d.sheet}:${d.rowNumber}`, field: `ссылка ${c.url}`, choice: 'local' });
+        continue;
+      }
+      st.push(stmt(db, `UPDATE feature_links SET kind = ?, source_column = ?, locally_edited = 0, updated_at = ?, updated_by = ?, version = version + 1 WHERE id = ?`,
+        c.source, c.column, now, user.id, c.id));
+      changes.push({ field: 'link', old: label(c.local, c.url), new: label(c.source, c.url) });
+      counts.conflicts.push({ row: `${d.sheet}:${d.rowNumber}`, field: `ссылка ${c.url}`, choice: 'source' });
+      linkCounts.conflicts_source++;
+    }
+    for (const m of plan.missing) {
+      if (!(choice.remove ?? []).includes(m.url)) { linkCounts.kept_missing++; continue; }
+      st.push(stmt(db, `DELETE FROM feature_links WHERE id = ? AND origin = 'import' AND source_id = ? AND locally_edited = 0`, m.id, source.id));
+      changes.push({ field: 'link', old: label(m.kind, m.url), new: null });
+      linkCounts.removed++;
+    }
+    if (changes.length) st.push(auditStmt(db, user, 'feature', featureId, 'import_links', changes, reason));
+  };
 
-  // 2. entity statements in dependency order: epics → offers → features
-  for (const type of ['epic', 'offer', 'feature'] as const) {
+  // 2. entity statements in dependency order: epics → features
+  for (const type of ['epic', 'feature'] as const) {
     for (const d of entityItems.filter((x) => x.entityType === type)) {
       const p = plan.get(d.seq);
       if (!p || !p.id) continue;
@@ -273,10 +340,6 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         if (type === 'epic') {
           st.push(stmt(db, `INSERT INTO epics (id, number, external_ref, title, description, category_id, status_id, visibility, created_at, updated_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, p.number, ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
-        } else if (type === 'offer') {
-          const codeTaken = snap.offers.some((o) => o.external_ref && lc(o.external_ref) === lc(ext));
-          st.push(stmt(db, `INSERT INTO offers (id, external_code, name, description, category_id, status_id, visibility, created_at, updated_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.id, codeTaken ? null : ext, pl.title, pl.description ?? '', pl.category_id ?? null, status, newVisibility, now, now, user.id));
         } else {
           const epicId = resolveExt('epic', pl.epic_ext);
           if (pl.epic_ext && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${pl.epic_ext}» пропущен или не найден — измените решение по эпику`);
@@ -295,7 +358,10 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
           }
         }
         st.push(linkStmt(type, ext, p.id, pl));
-        st.push(auditStmt(db, user, type, p.id, 'import_created', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber}` }], reason));
+        // a row deleted for good comes back only by this conscious choice: the tombstone goes away with it
+        if (pl.tombstone) st.push(stmt(db, 'DELETE FROM import_tombstones WHERE source_id = ? AND entity_type = ? AND lower(external_id) = lower(?)', source.id, type, ext));
+        st.push(auditStmt(db, user, type, p.id, 'import_created', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber}` }, ...(pl.tombstone ? [{ field: 'restored_after_delete', old: pl.tombstone.key, new: null }] : [])], reason));
+        if (type === 'feature') importLinks(d, p.id, true);
         continue;
       }
       if (p.mode === 'link') {
@@ -303,11 +369,13 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
         // attach the source to an existing card without overwriting anything
         st.push(linkStmt(type, ext, p.id, pl));
         st.push(auditStmt(db, user, type, p.id, 'import_linked', [{ field: 'source', old: null, new: `${d.sheet}:${d.rowNumber} (${ext})` }], reason));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       if (p.mode === 'unchanged') {
         counts.unchanged++;
         st.push(linkStmt(type, ext, p.id, pl));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       // update: only the fields that the preview showed and the user accepted
@@ -329,8 +397,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
           if (df.source && !epicId) throw badRequest(`${d.sheet}, строка ${d.rowNumber}: эпик «${df.source}» не найден`);
           cols.epic_id = epicId;
         } else {
-          const col = type === 'offer' && df.field === 'title' ? 'name' : df.field;
-          cols[col] = df.source;
+          cols[df.field] = df.source;
           if (df.field === 'status_id' && type === 'feature') cols.closed_at = doneStatuses.has(df.source as string) ? pl.closed_at ?? today : null;
         }
         changes.push({ field: df.field, old: df.local, new: df.source });
@@ -338,6 +405,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       if (!changes.length) {
         counts.unchanged++;
         st.push(linkStmt(type, ext, p.id, pl));
+        if (type === 'feature') importLinks(d, p.id, false);
         continue;
       }
       counts.updated++;
@@ -357,6 +425,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
       }
       st.push(linkStmt(type, ext, p.id, pl));
       st.push(auditStmt(db, user, type, p.id, 'import_updated', changes, reason));
+      if (type === 'feature') importLinks(d, p.id, false);
     }
   }
 
@@ -374,9 +443,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
     const to = keyToId(d.payload.to_key);
     if (!from || !to || from === to) { counts.relations_skipped++; continue; }
     const t = d.payload.relation_type as string;
-    if (t === 'affects_offer') {
-      st.push(stmt(db, 'INSERT OR IGNORE INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', from, to, now, user.id));
-    } else if (t === 'belongs_to_epic') {
+    if (t === 'belongs_to_epic') {
       st.push(stmt(db, 'UPDATE features SET epic_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND (epic_id IS NULL OR epic_id <> ?)', to, now, from, to));
     } else {
       if (t === 'blocks') {
@@ -393,7 +460,7 @@ async function buildApply(ctx: Ctx, run: Row, source: Row, drafts: ItemDraft[], 
   st.push(stmt(db, `UPDATE import_runs SET status = 'applied', applied_at = ?, applied_by = ?, counts = ? WHERE id = ?`, now, user.id, JSON.stringify(counts), run.id));
   st.push(stmt(db, 'UPDATE sheet_sources SET updated_at = ? WHERE id = ?', now, source.id));
   st.push(auditStmt(db, user, 'import', run.id, 'applied', [{ field: 'counts', old: null, new: { ...counts, conflicts: counts.conflicts.length } }], reason));
-  return { statements: st, counts, itemIds };
+  return { statements: st, counts: { ...counts, links: linkCounts }, itemIds };
 }
 
 export function registerImportRoutes(r: Router) {
@@ -477,7 +544,7 @@ export function registerImportRoutes(r: Router) {
   r.put('/api/import/sources/:id/csv', async (ctx) => {
     const user = requirePerm(ctx, perms.import);
     const b = await readJson(ctx, z.object({
-      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), offers: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional(), flat: z.string().max(1_000_000).optional() }),
+      sheets: z.object({ epics: z.string().max(1_000_000).optional(), features: z.string().max(1_000_000).optional(), relations: z.string().max(1_000_000).optional(), flat: z.string().max(1_000_000).optional() }),
       version: z.number().int(),
     }));
     const s = await getSource(ctx, ctx.params.id);
@@ -542,10 +609,10 @@ export function registerImportRoutes(r: Router) {
       const b = await readJson(ctx, z.object({ files: z.record(z.string().max(40), z.string().max(1_500_000)).optional() }));
       if (b.files && Object.keys(b.files).length) files = b.files;
     }
-    const { data, hash, notes } = await readSource(ctx, s, files);
+    const { data, hash, notes, hyperlinks } = await readSource(ctx, s, files);
     const config = configOf(s);
     const snap = await loadSnapshot(ctx.env.DB, s.id);
-    const items = buildPreview(data, config, snap);
+    const items = buildPreview(data, config, snap, { hyperlinks });
     if (items.length > 3000) throw badRequest('Слишком много строк для одного импорта (максимум 3000)');
     const db = ctx.env.DB;
     const runId = newId('run');
