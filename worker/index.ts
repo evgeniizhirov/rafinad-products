@@ -13,6 +13,7 @@ import { registerExportRoutes } from './routes/exports';
 import { registerFeatureRoutes } from './routes/features';
 import { registerImportRoutes } from './routes/imports';
 import { registerLinkRoutes } from './routes/links';
+import { registerGanttRoutes } from './routes/gantt';
 import { registerPhaseRoutes } from './routes/phases';
 import { registerProposalRoutes } from './routes/proposals';
 import { registerMergeRoutes } from './routes/merge';
@@ -39,6 +40,7 @@ registerAnalyticsRoutes(router);
 registerLinkRoutes(router);
 registerProposalRoutes(router);
 registerPhaseRoutes(router);
+registerGanttRoutes(router);
 
 const SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',

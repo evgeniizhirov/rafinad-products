@@ -56,7 +56,7 @@ export async function loadApiKeyUser(env: Env, req: Request): Promise<SessionUse
  */
 export function scopeFor(method: string, path: string): ApiScope | null {
   if (method === 'GET') {
-    if (/^\/api\/(features|overview|priorities|releases|epics|calendar|sprints|roadmap|graph|meta|analytics|proposals|auth\/me)(\/|$)/.test(path)) return 'tasks:read';
+    if (/^\/api\/(features|overview|priorities|releases|epics|calendar|sprints|roadmap|graph|meta|analytics|proposals|gantt|auth\/me)(\/|$)/.test(path)) return 'tasks:read';
     if (/^\/api\/exports(\/|$)/.test(path)) return 'exports:read';
     return null;
   }

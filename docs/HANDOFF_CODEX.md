@@ -137,6 +137,26 @@ npm run dev:node            # http://localhost:8788, БД .local/dev.sqlite, д�
 5. Приоритет P1/P2/P3 из таблицы хранится тегами и в рейтинг не входит: рейтинг считается только по голосам отделов.
 6. `npm`-реестр и Cloudflare API из облачной песочницы Claude были недоступны, поэтому деплой шёл только через Workers Builds, а D1 правился через MCP.
 
+## vNext (ТЗ 13.10) — в разработке, не выложено
+
+ТЗ: `docs/tz/vnext/00_VNEXT_TZ_2026-10-13.md`. Решения владельца и порядок PR: `docs/tz/vnext/01_DECISIONS_AND_PLAN.md`. Подробности по каждому PR — в `docs/IMPLEMENTATION_NOTES.md`, разделы v2-…
+
+PR идут цепочкой, каждый от предыдущего; merge, деплой и миграции на проде — только с разрешения владельца:
+
+| PR | Ветка | Миграция |
+| --- | --- | --- |
+| v2-01 «Офферы» убраны (API совместим: `offer_ids` игнорируется, `?offer=` — пустой список, маршруты офферов — 410) | `claude/v2-01-retire-offers` | — |
+| v2-01b таблицы офферов | `claude/v2-01b-drop-offers` | 0012 |
+| v2-03 внешние ссылки | `claude/v2-03-links` | 0013 |
+| v2-04 импорт ссылок | `claude/v2-04-link-import` | — |
+| v2-02 «Предложения» | `claude/v2-02-proposals` | 0014 |
+| v2-05 этапы задачи | `claude/v2-05-phases` | 0015 |
+| v2-06 общий Гант и «Обзор» (`GET /api/gantt`) | `claude/v2-06-gantt` | — |
+
+Дальше по плану: v2-07 планировщик Product (`/api/gantt?scope=planner` уже есть), v2-08 удаление навсегда, v2-09 конструктор экспорта, v2-10 удаление старых плановых периодов.
+
+Для MCP-интеграции (`codex/roadmap-chatgpt-mcp`): ключи `/overview`, `/calendar`, `/analytics/summary`, `/features/:id/schedule`, `stage_id`, `external_ref` не менялись; Гант — отдельный эндпоинт.
+
 ## Правила для следующих PR
 
 - Каждый модуль — отдельная ветка `codex/NN-…` и PR. Перед PR: `npm run typecheck && npm test && npm run build`.
