@@ -70,11 +70,29 @@ test('REST errors never leak raw bodies/secrets and create is never retried', as
 test('REST transport fixes origin, disallows redirects and sanitizes successful responses', async () => {
   const api = new Roadmap(env.RAFINAD_API_KEY, async (url, init) => {
     assert.equal(new URL(String(url)).origin, 'https://products-roadmap.ezhirov-es.workers.dev');
-    assert.equal(init?.redirect, 'error');
+    assert.equal(init?.redirect, 'manual');
     assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${env.RAFINAD_API_KEY}`);
     return Response.json({ title: env.RAFINAD_API_KEY, nested: { authorization: 'secret', note: 'Bearer secret' } });
   });
   assert.deepEqual(await api.task('RF-1'), { title: '[REDACTED]', nested: { note: 'Bearer [REDACTED]' } });
+});
+
+test('Service Binding disallows redirect responses without following Location or exposing the key', async () => {
+  for (const status of [301, 302, 307, 308]) {
+    let calls = 0;
+    const api = new Roadmap(env.RAFINAD_API_KEY, async (_url, init) => {
+      calls++;
+      assert.equal(init?.redirect, 'manual');
+      assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${env.RAFINAD_API_KEY}`);
+      return new Response(null, { status, headers: { location: 'https://untrusted.test/steal' } });
+    });
+    await assert.rejects(
+      api.request('/features', 'POST', { title: 'test' }),
+      (e: unknown) => e instanceof RoadmapError && e.status === 502 && e.code === 'redirect_refused'
+        && !e.message.includes(env.RAFINAD_API_KEY) && !e.message.includes('untrusted.test'),
+    );
+    assert.equal(calls, 1, 'No redirected or repeated write');
+  }
 });
 
 test('stale task version stops writes; 409 rereads state and requires new confirmation', async () => {
@@ -159,7 +177,7 @@ test('production transport uses the Roadmap service binding with the API key', a
   assert.deepEqual(seen, [{
     url: 'https://products-roadmap.ezhirov-es.workers.dev/api/auth/me',
     authorization: `Bearer ${env.RAFINAD_API_KEY}`,
-    redirect: 'error',
+    redirect: 'manual',
   }]);
 });
 
