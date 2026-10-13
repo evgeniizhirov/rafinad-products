@@ -6,6 +6,7 @@ import { confirmed, fields, filters, id, query, version } from './schemas';
 export interface McpWriteAccess {
   writesEnabled: boolean;
   tokenHasWriteScope: boolean;
+  resourceMetadataUrl: string;
 }
 
 export function createServer(api: Roadmap, access: McpWriteAccess) {
@@ -35,7 +36,15 @@ export function createServer(api: Roadmap, access: McpWriteAccess) {
           try { detail.current = await api.task(args.id); } catch { detail.current_unavailable = true; }
           detail.requires_new_confirmation = true;
         }
-        return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(api.sanitize(detail)) }] };
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: JSON.stringify(api.sanitize(detail)) }],
+          ...(error instanceof RoadmapError && error.code === 'missing_write_scope' ? {
+            _meta: { 'mcp/www_authenticate': [
+              `Bearer resource_metadata="${access.resourceMetadataUrl}", scope="roadmap:read roadmap:write", error="insufficient_scope", error_description="Authorize roadmap:write to perform this operation"`,
+            ] },
+          } : {}),
+        };
       }
     });
   }

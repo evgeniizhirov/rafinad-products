@@ -5,8 +5,8 @@ import { env, keys, token } from './helpers';
 import { handle } from '../src/index';
 
 test('official MCP client connects over Streamable HTTP in legacy and modern protocol modes', async () => {
-  for (const mode of ['legacy', 'auto'] as const) {
-    const bearer = await token();
+  for (const mode of ['legacy', 'auto'] as const) for (const canWrite of [false, true]) {
+    const bearer = await token({ scope: canWrite ? 'roadmap:read roadmap:write' : 'roadmap:read' });
     const client = new Client({ name: 'acceptance-client', version: '1.0.0' }, { versionNegotiation: { mode } });
     const transport = new StreamableHTTPClientTransport(new URL(env.MCP_RESOURCE), {
       authProvider: { token: async () => bearer },
@@ -20,8 +20,13 @@ test('official MCP client connects over Streamable HTTP in legacy and modern pro
       const result = await client.callTool({ name: 'get_my_profile', arguments: {} });
       assert.deepEqual(result.structuredContent, { data: {
         user: { id: 'fixture-user' },
-        mcp_access: { writes_enabled: true, token_has_write_scope: true, can_write: true },
+        mcp_access: { writes_enabled: true, token_has_write_scope: canWrite, can_write: canWrite },
       } });
+      if (!canWrite) {
+        const refused = await client.callTool({ name: 'create_task', arguments: { fields: { title: 'Not created' }, confirmed: true } });
+        assert.equal(refused.isError, true);
+        assert.ok(refused._meta?.['mcp/www_authenticate']);
+      }
     } finally { await client.close(); }
   }
 });
