@@ -4,10 +4,26 @@ import { I } from './icons';
 import { api, ApiError, invalidate, mutate, openFeature, toast, useApi, useApp, useClickOutside, useDebounced, useDict } from './lib';
 import { Cubes, Field, Modal, ReasonModal, ScoreCell, StatusPill, useDirty, VisBadge } from './ui';
 
+export const KIND_LABEL: Record<string, string> = { planned: 'Плановая', bug: 'Баг', operational_improvement: 'Оперативная доработка' };
+export const URGENCY_LABEL: Record<string, string> = { low: 'низкая', medium: 'средняя', high: 'высокая', critical: 'критическая' };
+/** bugs use the ordinary status; this is how its semantic reads for a bug */
+export const BUG_STATE: Record<string, string> = { new: 'не решено', analysis: 'не решено', ready: 'не решено', planned: 'не решено', in_progress: 'в работе', blocked: 'в работе (блок)', postponed: 'отложено', done: 'решено', cancelled: 'отменено' };
+
+/** work type + hidden Product task markers (nothing for an ordinary planned task) */
+export function KindBadges({ f }: { f: any }) {
+  return (
+    <>
+      {f.task_kind && f.task_kind !== 'planned' && <span className={`pill ${f.task_kind === 'bug' ? 'danger' : 'warn'}`} style={{ marginRight: 6, fontSize: 11 }}>{KIND_LABEL[f.task_kind]}</span>}
+      {f.task_kind && f.task_kind !== 'planned' && f.urgency && ['high', 'critical'].includes(f.urgency) && <span className="pill danger" style={{ marginRight: 6, fontSize: 11 }} title="Срочность">{URGENCY_LABEL[f.urgency]}</span>}
+      {f.is_product_internal && <span className="pill outline" style={{ marginRight: 6, fontSize: 11 }} title="Видна только продуктовой команде и администраторам">Внутренняя продукта</span>}
+    </>
+  );
+}
+
 export function FeatureTitle({ f, sub = true }: { f: any; sub?: boolean }) {
   return (
     <div className="title-cell">
-      <div className="t">{f.title}</div>
+      <div className="t"><KindBadges f={f} />{f.title}</div>
       {sub && (
         <div className="sub ellipsis">
           {[f.epic && !f.epic.hidden ? f.epic.title : f.category?.name, f.assignee_name].filter(Boolean).join(', ')}
@@ -164,8 +180,18 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     tags: (feature?.tags ?? []).join(', '),
     offer_ids: (feature?.offers ?? []).map((o: any) => o.id),
     private_notes: feature?.private_notes ?? '',
+    task_kind: feature?.task_kind ?? 'planned',
+    is_product_internal: !!feature?.is_product_internal,
+    is_focus: !!feature?.is_focus,
+    urgency: feature?.urgency ?? '',
+    fact_hours: feature?.fact_hours ?? '',
+    initiator_type: feature?.initiator?.type ?? '',
+    initiator_name: feature?.initiator?.type === 'free_text' ? feature.initiator.name : '',
+    initiator_user_id: feature?.initiator?.user_id ?? '',
+    initiator_department_id: feature?.initiator?.department_id ?? '',
     ...defaults,
   }));
+  const directory = useApi<any>('/users/directory');
   const dirty = useDirty(v);
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: any) => setV((s) => ({ ...s, [k]: e.target.value }));
@@ -177,10 +203,35 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       stage_id: nul(v.stage_id), visibility: v.visibility, author_name: nul(v.author_name.trim()), assignee_name: nul(v.assignee_name.trim()),
       requested_at: nul(v.requested_at), planned_start: nul(v.planned_start), planned_end: nul(v.planned_end), external_ref: nul(v.external_ref.trim()),
       tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), offer_ids: v.offer_ids, private_notes: nul(v.private_notes),
+      task_kind: v.task_kind, is_product_internal: v.is_product_internal,
+      is_focus: v.task_kind === 'planned' && !v.is_product_internal ? v.is_focus : false,
+      ...(v.task_kind !== 'planned' || feature?.urgency || feature?.fact_hours != null
+        ? { urgency: v.urgency || null, fact_hours: v.fact_hours === '' ? null : Number(String(v.fact_hours).replace(',', '.')) }
+        : {}),
+      initiator: v.initiator_type === 'free_text' ? { type: 'free_text', name: v.initiator_name.trim() }
+        : v.initiator_type === 'user' ? { type: 'user', user_id: v.initiator_user_id }
+        : v.initiator_type === 'department' ? { type: 'department', department_id: v.initiator_department_id }
+        : null,
     };
-    const r = feature
-      ? await mutate(`/features/${feature.id}`, 'PATCH', { ...body, version: feature.version }, 'Изменения сохранены')
-      : await mutate<any>('/features', 'POST', body, 'Задача создана');
+    let r: any = null;
+    if (feature) {
+      try {
+        r = await api(`/features/${feature.id}`, { method: 'PATCH', body: { ...body, version: feature.version } });
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'confirm_disclose') {
+          // the hidden Product task becomes visible to other departments: explicit confirmation
+          r = window.confirm(`${e.message}\n\nСделать задачу общей?`)
+            ? await mutate(`/features/${feature.id}`, 'PATCH', { ...body, version: feature.version, confirm_disclose: true }, 'Задача стала общей')
+            : null;
+        } else {
+          toast(e instanceof Error ? e.message : 'Ошибка', 'error');
+          if (e instanceof ApiError && e.code === 'version_conflict') invalidate();
+        }
+      }
+      if (r && !r.unchanged) { invalidate(); toast('Изменения сохранены'); }
+    } else {
+      r = await mutate<any>('/features', 'POST', body, 'Задача создана');
+    }
     setBusy(false);
     if (r) {
       onClose();
@@ -196,13 +247,56 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!v.title.trim() || busy} onClick={submit}>{feature ? 'Сохранить' : 'Создать задачу'}</button>
+          <button className="btn primary" disabled={!v.title.trim() || busy || (v.initiator_type === 'free_text' && !v.initiator_name.trim()) || (v.initiator_type === 'user' && !v.initiator_user_id) || (v.initiator_type === 'department' && !v.initiator_department_id)} onClick={submit}>{feature ? 'Сохранить' : 'Создать задачу'}</button>
         </>
       }
     >
       <div className="form-grid">
         <Field label="Название" span2><input className="input" value={v.title} onChange={set('title')} maxLength={300} autoFocus /></Field>
         <Field label="Описание" span2><textarea className="textarea" rows={5} value={v.description} onChange={set('description')} /></Field>
+        <Field label="Тип работы" hint={v.task_kind === 'planned' ? 'Участвует в планировании и релизах' : 'Не планируется по часам и не входит в релизы'}>
+          <select className="select" value={v.task_kind} onChange={set('task_kind')}>
+            <option value="planned">Плановая задача</option>
+            <option value="bug">Баг</option>
+            <option value="operational_improvement">Оперативная доработка</option>
+          </select>
+        </Field>
+        <Field label="Скрытость" hint="Видна только продуктовой команде и администраторам; не попадает в общие списки, релизы и план">
+          <label className="check" style={{ minHeight: 36 }}>
+            <input type="checkbox" checked={v.is_product_internal} onChange={(e) => setV((s) => ({ ...s, is_product_internal: e.target.checked }))} />
+            Внутренняя задача продукта
+          </label>
+          {v.task_kind === 'planned' && !v.is_product_internal && (
+            <label className="check" title="Обязательство релиза перед бизнесом — показывается в целях спринта независимо от статуса">
+              <input type="checkbox" checked={v.is_focus} onChange={(e) => setV((s) => ({ ...s, is_focus: e.target.checked }))} />
+              Фокусная задача релиза
+            </label>
+          )}
+        </Field>
+        <Field label="Инициатор" hint="Кто попросил задачу — не автор карточки и не исполнитель">
+          <select className="select" value={v.initiator_type} onChange={set('initiator_type')}>
+            <option value="">Не указан</option>
+            <option value="free_text">Человек без учётной записи (ФИО)</option>
+            <option value="user">Пользователь Roadmap</option>
+            <option value="department">Отдел</option>
+          </select>
+        </Field>
+        <Field label={v.initiator_type === 'user' ? 'Пользователь' : v.initiator_type === 'department' ? 'Отдел' : 'Фамилия Имя'}>
+          {v.initiator_type === 'user' ? (
+            <select className="select" value={v.initiator_user_id} onChange={set('initiator_user_id')}>
+              <option value="">Выберите пользователя</option>
+              {feature?.initiator?.type === 'user' && !(directory.data?.users ?? []).some((u: any) => u.id === v.initiator_user_id) && v.initiator_user_id && <option value={v.initiator_user_id}>{feature.initiator.name}</option>}
+              {(directory.data?.users ?? []).map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          ) : v.initiator_type === 'department' ? (
+            <select className="select" value={v.initiator_department_id} onChange={set('initiator_department_id')}>
+              <option value="">Выберите отдел</option>
+              {meta.departments.filter((x) => x.is_active || x.id === v.initiator_department_id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          ) : (
+            <input className="input" value={v.initiator_name} onChange={set('initiator_name')} disabled={v.initiator_type !== 'free_text'} placeholder={v.initiator_type === 'free_text' ? 'Иванов Иван' : '—'} maxLength={120} />
+          )}
+        </Field>
         <Field label="Эпик">
           <select className="select" value={v.epic_id} onChange={set('epic_id')}>
             <option value="">Без эпика</option>
@@ -239,7 +333,18 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
         <Field label="Дата постановки"><input type="date" className="input" value={v.requested_at} onChange={set('requested_at')} /></Field>
         <Field label="Теги" hint="Через запятую"><input className="input" value={v.tags} onChange={set('tags')} /></Field>
         <Field label="Плановое начало"><input type="date" className="input" value={v.planned_start} onChange={set('planned_start')} /></Field>
-        <Field label="Плановое завершение"><input type="date" className="input" value={v.planned_end} onChange={set('planned_end')} /></Field>
+        <Field label={v.task_kind === 'planned' ? 'Плановое завершение' : 'Плановая дата устранения'} hint={v.task_kind === 'planned' ? undefined : 'Без даты задача не попадает на диаграмму Ганта'}><input type="date" className="input" value={v.planned_end} onChange={set('planned_end')} /></Field>
+        {v.task_kind !== 'planned' && (
+          <>
+            <Field label="Срочность" hint="Не межотдельный приоритет — только для багов и доработок">
+              <select className="select" value={v.urgency} onChange={set('urgency')}>
+                <option value="">Не указана</option>
+                {Object.entries(URGENCY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </Field>
+            <Field label="Факт часов" hint="Заполняется после устранения, только для аналитики"><input className="input" inputMode="decimal" value={v.fact_hours} onChange={set('fact_hours')} /></Field>
+          </>
+        )}
         <Field label="Связанные офферы" span2>
           <div className="row wrap" style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: 8, gap: 6 }}>
             {(offers.data?.offers ?? []).map((o: any) => (
@@ -266,7 +371,7 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
 export function FeaturePicker({ onPick, exclude = [], placeholder = 'Найти задачу по номеру или названию' }: { onPick: (f: any) => void; exclude?: string[]; placeholder?: string }) {
   const [q, setQ] = useState('');
   const dq = useDebounced(q, 200);
-  const res = useApi<any>(dq.trim().length >= 1 ? `/features?q=${encodeURIComponent(dq.trim())}&sort=number` : null);
+  const res = useApi<any>(dq.trim().length >= 1 ? `/features?q=${encodeURIComponent(dq.trim())}&sort=number&internal=all` : null);
   const list = useMemo(() => (res.data?.features ?? []).filter((f: any) => !exclude.includes(f.id)).slice(0, 8), [res.data, exclude]);
   return (
     <div className="stack tight">

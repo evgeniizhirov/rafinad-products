@@ -69,8 +69,24 @@ export function createD1(path = ':memory:'): D1Database & { raw: DatabaseSync } 
   };
 }
 
+/**
+ * Applies migrations that are not recorded yet in d1_migrations (same bookkeeping as wrangler),
+ * so an existing local database picks up new migrations on the next start.
+ */
 export function migrate(d1: { raw: DatabaseSync }, dir = join(import.meta.dirname, '..', 'migrations')) {
+  const db = d1.raw;
+  const hadTable = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'd1_migrations'").get();
+  db.exec('CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+  if (!hadTable && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'features'").get()) {
+    // a local database created before this bookkeeping existed: record what is already there
+    db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0001_init.sql')").run();
+    const cols = (t: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
+    if (cols('import_runs').includes('origin')) db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0002_import_origin.sql')").run();
+  }
+  const done = new Set((db.prepare('SELECT name FROM d1_migrations').all() as { name: string }[]).map((r) => r.name));
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) {
-    d1.raw.exec(readFileSync(join(dir, f), 'utf8'));
+    if (done.has(f)) continue;
+    db.exec(readFileSync(join(dir, f), 'utf8'));
+    db.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run(f);
   }
 }

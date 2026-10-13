@@ -7,7 +7,7 @@ import { perms, requirePerm, requireUser } from '../lib/auth';
 import { auditStmt, diffFields, type Change } from '../lib/audit';
 import { all, bool, first, guardVersion, newId, nowIso, stmt, tx, type Row } from '../lib/db';
 import { badRequest, conflict, forbidden, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
-import { canSee, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, loadWorld, viewerOf, visibleFeatures, type FeatureFlag, type World } from '../lib/world';
+import { canSeeFeature, featureDto, featureRef, FLAG_LABELS, hasFlag, indexWorld, isClosed, isPlannable, isProductInternal, loadWorld, matchesInitiator, TASK_KINDS, viewerOf, visibleFeatures, type FeatureFlag, type Viewer, type World } from '../lib/world';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД').nullable().optional();
 const visibility = z.enum(['draft', 'internal', 'public']);
@@ -30,14 +30,51 @@ const featureFields = {
   private_notes: z.string().max(5000).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   offer_ids: z.array(z.string()).max(100).optional(),
+  task_kind: z.enum(TASK_KINDS).optional(),
+  /** release commitment to the business (FR-03); only for planned tasks */
+  is_focus: z.boolean().optional(),
+  /** bugs / operational improvements: urgency (never a department vote) and actual hours after the fix */
+  urgency: z.enum(['low', 'medium', 'high', 'critical']).nullable().optional(),
+  fact_hours: z.number().min(0).max(100000).nullable().optional(),
+  is_product_internal: z.boolean().optional(),
+  /** null clears the initiator */
+  initiator: z.discriminatedUnion('type', [
+    z.object({ type: z.literal('free_text'), name: z.string().trim().min(1, 'Укажите имя инициатора').max(120) }),
+    z.object({ type: z.literal('user'), user_id: z.string().min(1) }),
+    z.object({ type: z.literal('department'), department_id: z.string().min(1) }),
+  ]).nullable().optional(),
 };
+
+type InitiatorInput = z.infer<typeof featureFields.initiator>;
+
+/** initiator → the four stored columns (with a name snapshot); validates the referenced user / department */
+async function initiatorColumns(ctx: Ctx, i: InitiatorInput): Promise<Row | undefined> {
+  if (i === undefined) return undefined;
+  if (i === null) return { initiator_type: null, initiator_user_id: null, initiator_department_id: null, initiator_name: null };
+  if (i.type === 'free_text') return { initiator_type: 'free_text', initiator_user_id: null, initiator_department_id: null, initiator_name: i.name };
+  if (i.type === 'user') {
+    const u = await first(ctx.env.DB, 'SELECT id, name FROM users WHERE id = ?', i.user_id);
+    if (!u) throw badRequest('Пользователь-инициатор не найден');
+    return { initiator_type: 'user', initiator_user_id: u.id, initiator_department_id: null, initiator_name: u.name };
+  }
+  const d = await first(ctx.env.DB, 'SELECT id, name FROM departments WHERE id = ?', i.department_id);
+  if (!d) throw badRequest('Отдел-инициатор не найден');
+  return { initiator_type: 'department', initiator_user_id: null, initiator_department_id: d.id, initiator_name: d.name };
+}
 const createSchema = z.object({ ...featureFields, estimates: z.record(z.string(), z.number().min(0).max(100000)).optional() });
-const patchSchema = z.object({ ...featureFields, title: featureFields.title.optional(), version: z.number().int() });
+const patchSchema = z.object({
+  ...featureFields,
+  title: featureFields.title.optional(),
+  version: z.number().int(),
+  /** required to turn a hidden Product task into a general one (it becomes visible to other departments) */
+  confirm_disclose: z.boolean().optional(),
+});
 
 export async function resolveFeature(ctx: Ctx, ref: string): Promise<Row> {
   const m = /^(?:rf-)?(\d+)$/i.exec(ref);
   const f = m ? await first(ctx.env.DB, 'SELECT * FROM features WHERE number = ?', Number(m[1])) : await first(ctx.env.DB, 'SELECT * FROM features WHERE id = ?', ref);
-  if (!f) throw notFound('Задача не найдена');
+  // hidden Product tasks do not exist for anyone else: same 404 as a missing id
+  if (!f || (isProductInternal(f) && viewerOf(ctx.user) !== 'editor')) throw notFound('Задача не найдена');
   return f;
 }
 
@@ -57,6 +94,8 @@ async function validateRefs(ctx: Ctx, b: Record<string, any>) {
     for (const t of Object.keys(b.estimates)) if (!(await first(db, 'SELECT 1 FROM resource_teams WHERE id = ?', t))) throw badRequest('Ресурсная команда не найдена');
   }
 }
+
+const db0 = (ctx: Ctx) => ctx.env.DB;
 
 async function semanticOf(ctx: Ctx, statusId: string): Promise<string | null> {
   return (await first<{ semantic: string }>(ctx.env.DB, 'SELECT semantic FROM statuses WHERE id = ?', statusId))?.semantic ?? null;
@@ -80,45 +119,63 @@ export function sortFeatures(rows: Row[], w: World, idx: ReturnType<typeof index
   return rows.slice().sort(cmp[sort] ?? cmp.priority);
 }
 
+/**
+ * The task list query shared by the backlog and the export (FR-08): the same filters, re-applied on the server,
+ * over a world that already respects the viewer (hidden Product tasks only for product/admin asking for them).
+ */
+export function queryFeatures(p: URLSearchParams, viewer: Viewer, w: World, idx: ReturnType<typeof indexWorld>): Row[] {
+  const q = (p.get('q') || '').trim().toLowerCase();
+  const scope = viewer === 'editor' ? ({ '1': 'internal', only: 'internal', all: 'all' } as const)[p.get('internal') ?? ''] ?? 'general' : 'general';
+  let rows = visibleFeatures(w, viewer, scope);
+  const filt = (key: string, fn: (f: Row, v: string) => boolean) => {
+    const vals = p.getAll(key).flatMap((v) => v.split(',')).filter(Boolean);
+    if (vals.length) rows = rows.filter((f) => vals.some((v) => fn(f, v)));
+  };
+  filt('status', (f, v) => f.status_id === v || idx.status.get(f.status_id)?.semantic === v);
+  filt('category', (f, v) => f.category_id === v);
+  filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
+  filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
+  filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
+  filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
+  filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
+  filt('stage', (f, v) => f.stage_id === v);
+  filt('kind', (f, v) => (f.task_kind ?? 'planned') === v);
+  filt('sprint', (f, v) => (v === 'none' ? !f.sprint_id : f.sprint_id === v || idx.sprint.get(f.sprint_id)?.code === v));
+  filt('ids', (f, v) => f.id === v); // drill-down from analytics: the server still applies all ACL rules
+  filt('assignee', (f, v) => (v === 'none' ? !f.assignee_name : (f.assignee_name ?? '').toLowerCase() === v.toLowerCase()));
+  if (p.get('focus') === '1') rows = rows.filter((f) => bool(f.is_focus));
+  if (viewer !== 'guest') filt('initiator', (f, v) => matchesInitiator(f, w, v));
+  if (viewer !== 'guest') filt('visibility', (f, v) => f.visibility === v);
+  const from = p.get('created_from');
+  const to = p.get('created_to');
+  if (from) rows = rows.filter((f) => (f.requested_at ?? f.created_at.slice(0, 10)) >= from);
+  if (to) rows = rows.filter((f) => (f.requested_at ?? f.created_at.slice(0, 10)) <= to);
+  if (q) {
+    rows = rows.filter((f) =>
+      `rf-${f.number} ${f.title} ${f.description} ${(idx.tagsBy.get(f.id) ?? []).join(' ')} ${viewer !== 'guest' ? f.external_ref ?? '' : ''}`.toLowerCase().includes(q),
+    );
+  }
+  if (p.get('hide_closed') === '1') rows = rows.filter((f) => !isClosed(f, idx));
+  const flag = p.get('flag') as FeatureFlag | null;
+  if (flag && flag in FLAG_LABELS) rows = rows.filter((f) => hasFlag(flag, f, w, idx));
+  const tag = (p.get('tag') || '').trim().toLowerCase();
+  if (tag) rows = rows.filter((f) => (idx.tagsBy.get(f.id) ?? []).some((t) => t.toLowerCase() === tag));
+  return sortFeatures(rows, w, idx, p.get('sort') || 'priority');
+}
+
 export function registerFeatureRoutes(r: Router) {
   r.get('/api/features', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer, { includeInternal: true });
     const idx = indexWorld(w);
-    const p = ctx.url.searchParams;
-    const q = (p.get('q') || '').trim().toLowerCase();
-    let rows = visibleFeatures(w, viewer);
-    const filt = (key: string, fn: (f: Row, v: string) => boolean) => {
-      const vals = p.getAll(key).flatMap((v) => v.split(',')).filter(Boolean);
-      if (vals.length) rows = rows.filter((f) => vals.some((v) => fn(f, v)));
-    };
-    filt('status', (f, v) => f.status_id === v || idx.status.get(f.status_id)?.semantic === v);
-    filt('category', (f, v) => f.category_id === v);
-    filt('epic', (f, v) => (v === 'none' ? !f.epic_id : f.epic_id === v));
-    filt('department', (f, v) => (idx.votesBy.get(f.id) ?? []).some((x) => x.department_id === v));
-    filt('offer', (f, v) => (idx.offersByFeature.get(f.id) ?? []).includes(v));
-    filt('release', (f, v) => (v === 'none' ? !idx.releaseOf.has(f.id) : idx.releaseOf.get(f.id) === v));
-    filt('period', (f, v) => (v === 'none' ? !f.period_id : f.period_id === v));
-    filt('stage', (f, v) => f.stage_id === v);
-    if (viewer !== 'guest') filt('visibility', (f, v) => f.visibility === v);
-    if (q) {
-      rows = rows.filter((f) =>
-        `rf-${f.number} ${f.title} ${f.description} ${(idx.tagsBy.get(f.id) ?? []).join(' ')} ${viewer !== 'guest' ? f.external_ref ?? '' : ''}`.toLowerCase().includes(q),
-      );
-    }
-    if (p.get('hide_closed') === '1') rows = rows.filter((f) => !isClosed(f, idx));
-    const flag = p.get('flag') as FeatureFlag | null;
-    if (flag && flag in FLAG_LABELS) rows = rows.filter((f) => hasFlag(flag, f, w, idx));
-    const tag = (p.get('tag') || '').trim().toLowerCase();
-    if (tag) rows = rows.filter((f) => (idx.tagsBy.get(f.id) ?? []).some((t) => t.toLowerCase() === tag));
-    rows = sortFeatures(rows, w, idx, p.get('sort') || 'priority');
+    const rows = queryFeatures(ctx.url.searchParams, viewer, w, idx);
     return json({ features: rows.map((f) => featureDto(f, viewer, w, idx)), total: rows.length });
   });
 
   r.get('/api/features/:ref', async (ctx) => {
     const viewer = viewerOf(ctx.user);
     const f0 = await resolveFeature(ctx, ctx.params.ref);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer, { includeInternal: true });
     const idx = indexWorld(w);
     let f = idx.feature.get(f0.id)!;
     let mergedFrom: Row | null = null;
@@ -127,7 +184,7 @@ export function registerFeatureRoutes(r: Router) {
       mergedFrom = mergedFrom ?? f;
       f = idx.feature.get(f.merged_into_id)!;
     }
-    if (!canSee(viewer, f.visibility)) throw notFound('Задача не найдена');
+    if (!canSeeFeature(viewer, f)) throw notFound('Задача не найдена');
     const dto = featureDto(f, viewer, w, idx, { detail: true }) as Record<string, unknown>;
     if (mergedFrom) dto.merged_from = { id: mergedFrom.id, key: `RF-${mergedFrom.number}` };
     if (viewer !== 'guest') {
@@ -142,6 +199,13 @@ export function registerFeatureRoutes(r: Router) {
          ORDER BY id DESC LIMIT 300`,
         ...ids,
       ).then((rows) => rows.map((h) => ({ ...h, changes: h.changes ? JSON.parse(h.changes) : null, is_override: !!h.is_override })));
+      if (viewer !== 'editor') {
+        // relation history must not reveal hidden Product tasks (their ids live in the change records)
+        const hiddenIds = (await all(ctx.env.DB, 'SELECT id FROM features WHERE is_product_internal = 1')).map((x) => x.id as string);
+        if (hiddenIds.length) {
+          dto.history = (dto.history as Row[]).filter((h) => h.action !== 'relation_added' && h.action !== 'relation_removed' ? true : !hiddenIds.some((hid) => JSON.stringify(h.changes ?? '').includes(hid)));
+        }
+      }
       if (viewer === 'editor') {
         dto.sources = await all(
           ctx.env.DB,
@@ -158,6 +222,10 @@ export function registerFeatureRoutes(r: Router) {
     const user = requirePerm(ctx, perms.editCatalog);
     const b = await readJson(ctx, createSchema);
     await validateRefs(ctx, b);
+    const initiator = (await initiatorColumns(ctx, b.initiator)) ?? { initiator_type: null, initiator_user_id: null, initiator_department_id: null, initiator_name: null };
+    const kind = b.task_kind ?? 'planned';
+    const internal = b.is_product_internal ? 1 : 0;
+    if (b.is_focus && (kind !== 'planned' || internal)) throw badRequest('Фокусной может быть только плановая общая задача');
     const db = ctx.env.DB;
     const statusId = b.status_id ?? 'st_f_new';
     const sem = await semanticOf(ctx, statusId);
@@ -167,15 +235,22 @@ export function registerFeatureRoutes(r: Router) {
       const num = ((await first<{ n: number }>(db, 'SELECT COALESCE(MAX(number), 0) + 1 AS n FROM features'))?.n ?? 1);
       const statements = [
         stmt(db, `INSERT INTO features (id, number, external_ref, title, description, category_id, epic_id, status_id, stage_id, author_name, assignee_name,
-            requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            requested_at, planned_start, planned_end, closed_at, visibility, private_notes, created_at, updated_at, created_by, updated_by,
+            task_kind, is_product_internal, initiator_type, initiator_user_id, initiator_department_id, initiator_name, is_focus, urgency, fact_hours)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id, num, b.external_ref ?? null, b.title, b.description ?? '', b.category_id ?? null, b.epic_id ?? null, statusId, b.stage_id ?? null,
           b.author_name ?? user.name, b.assignee_name ?? null, b.requested_at ?? now.slice(0, 10), b.planned_start ?? null, b.planned_end ?? null,
-          sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id),
+          sem === 'done' ? now.slice(0, 10) : null, b.visibility ?? 'internal', b.private_notes ?? null, now, now, user.id, user.id,
+          kind, internal, initiator.initiator_type, initiator.initiator_user_id, initiator.initiator_department_id, initiator.initiator_name, b.is_focus ? 1 : 0, b.urgency ?? null, b.fact_hours ?? null),
         ...[...new Set(b.tags ?? [])].map((t) => stmt(db, 'INSERT INTO feature_tags (feature_id, tag) VALUES (?, ?)', id, t)),
         ...[...new Set(b.offer_ids ?? [])].map((o) => stmt(db, 'INSERT INTO feature_offers (feature_id, offer_id, created_at, created_by) VALUES (?, ?, ?, ?)', id, o, now, user.id)),
         ...Object.entries(b.estimates ?? {}).map(([t, h]) => stmt(db, 'INSERT INTO feature_estimates (feature_id, team_id, hours, is_manual, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?)', id, t, h, now, user.id)),
-        auditStmt(db, user, 'feature', id, 'created', [{ field: 'title', old: null, new: b.title }]),
+        auditStmt(db, user, 'feature', id, 'created', [
+          { field: 'title', old: null, new: b.title },
+          ...(kind !== 'planned' ? [{ field: 'task_kind', old: null, new: kind }] : []),
+          ...(internal ? [{ field: 'is_product_internal', old: null, new: 1 }] : []),
+          ...(initiator.initiator_type ? [{ field: 'initiator', old: null, new: initiator.initiator_name }] : []),
+        ]),
       ];
       try {
         await tx(db, statements);
@@ -195,8 +270,27 @@ export function registerFeatureRoutes(r: Router) {
     if (f.merged_into_id) throw conflict('merged', 'Карточка объединена с другой — редактируйте основную');
     await validateRefs(ctx, b);
     const db = ctx.env.DB;
-    const { version, tags, offer_ids, ...fields } = b;
-    const patch: Row = { ...fields };
+    const { version, tags, offer_ids, initiator, is_product_internal, confirm_disclose, is_focus, ...fields } = b;
+    const patch: Row = { ...fields, ...(await initiatorColumns(ctx, initiator)) };
+    if (is_focus !== undefined) patch.is_focus = is_focus ? 1 : 0;
+    const nextKind = fields.task_kind ?? f.task_kind ?? 'planned';
+    const nextInternal = is_product_internal ?? isProductInternal(f);
+    if ((is_focus ?? !!f.is_focus) && (nextKind !== 'planned' || nextInternal)) {
+      if (is_focus) throw badRequest('Фокусной может быть только плановая общая задача');
+      patch.is_focus = 0; // a task that stops being a planned commitment loses the focus mark
+    }
+    // bug → planned task: its sprint was only a reference, it must not silently become a sprint commitment
+    if (fields.task_kind === 'planned' && (f.task_kind ?? 'planned') !== 'planned' && f.sprint_id) patch.sprint_id = null;
+    if (is_product_internal !== undefined) patch.is_product_internal = is_product_internal ? 1 : 0;
+    const wasInternal = isProductInternal(f);
+    if (wasInternal && patch.is_product_internal === 0 && !confirm_disclose) {
+      throw conflict('confirm_disclose', 'Задача станет видна другим отделам (и гостям, если она опубликована). Подтвердите раскрытие.');
+    }
+    const inRelease = await first(db0(ctx), 'SELECT release_id FROM release_features WHERE feature_id = ?', f.id);
+    if (inRelease && !wasInternal && patch.is_product_internal === 1) throw badRequest('Задача входит в релиз: сначала уберите её из релиза');
+    if (inRelease && fields.task_kind && fields.task_kind !== 'planned' && (f.task_kind ?? 'planned') === 'planned') {
+      throw badRequest('Задача входит в релиз: баг или оперативная доработка не может быть в составе релиза');
+    }
     if (fields.status_id && fields.status_id !== f.status_id) {
       const prevSem = await semanticOf(ctx, f.status_id);
       const nextSem = await semanticOf(ctx, fields.status_id);
@@ -296,6 +390,7 @@ export function registerFeatureRoutes(r: Router) {
     }));
     const f = await resolveFeature(ctx, ctx.params.id);
     const db = ctx.env.DB;
+    if (b.period_id && !isPlannable(f)) throw badRequest('Баги, оперативные доработки и внутренние задачи продукта не размещаются в плановых периодах');
     if (b.period_id && !(await first(db, 'SELECT 1 FROM capacity_periods WHERE id = ?', b.period_id))) throw badRequest('Период не найден');
     const overload = b.period_id && b.period_id !== f.period_id ? await overloadFor(ctx, f.id, b.period_id) : [];
     if (overload.length && !b.confirm_overload) {
@@ -377,7 +472,7 @@ export function registerFeatureRoutes(r: Router) {
   // ───── dependency graph ─────
   r.get('/api/graph', async (ctx) => {
     const viewer = viewerOf(ctx.user);
-    const w = await loadWorld(ctx.env.DB);
+    const w = await loadWorld(ctx.env.DB, viewer);
     const idx = indexWorld(w);
     const visible = new Set(visibleFeatures(w, viewer).map((f) => f.id));
     const edges = w.relations.filter((r) => r.type === 'blocks' && idx.feature.has(r.from_id) && idx.feature.has(r.to_id));
@@ -406,7 +501,7 @@ export async function overloadFor(ctx: Ctx, featureId: string, periodId: string)
   const caps = new Map((await all(db, 'SELECT team_id, hours FROM team_capacities WHERE period_id = ?', periodId)).map((c) => [capacityKey(periodId, c.team_id), c.hours]));
   const planned = new Map(
     (await all(db, `SELECT e.team_id, SUM(e.hours) AS h FROM feature_estimates e JOIN features f ON f.id = e.feature_id
-       WHERE f.period_id = ? AND f.id <> ? AND f.merged_into_id IS NULL GROUP BY e.team_id`, periodId, featureId)).map((p) => [capacityKey(periodId, p.team_id), p.h]),
+       WHERE f.period_id = ? AND f.id <> ? AND f.merged_into_id IS NULL AND f.task_kind = 'planned' AND f.is_product_internal = 0 GROUP BY e.team_id`, periodId, featureId)).map((p) => [capacityKey(periodId, p.team_id), p.h]),
   );
   const teams = new Map((await all(db, 'SELECT id, name FROM resource_teams')).map((t) => [t.id, t.name]));
   return overloadIfAdded(periodId, Object.fromEntries(est.map((e) => [e.team_id, e.hours])), caps, planned).map((o) => ({ ...o, team_name: teams.get(o.teamId) }));
