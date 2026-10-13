@@ -10,15 +10,15 @@
 
 На 13.10.2026 пользователь сообщил план **Plus**. Наличие Add custom MCP server/Developer mode и разрешение записи в конкретном аккаунте пока не подтверждены. Текущая [инструкция OpenAI](https://developers.openai.com/plugins/deploy/connect-chatgpt) описывает добавление сервера через Plugins и подчёркивает зависимость от политики аккаунта/workspace. Поэтому `ENABLE_WRITES="false"` по умолчанию. Нельзя обещать запись на основании одного названия тарифа.
 
-Ничего не развёрнуто; производственные данные и секреты не менялись. Ранее раскрытый ключ не отозван автоматически — это должен сделать владелец перед подключением.
+**Развёрнуто (13.10):** Worker `rafinad-roadmap-mcp` опубликован, переменные OAuth (Auth0) и секрет заданы в Cloudflare. Сборка — Cloudflare Workers Builds из `main` (корень `/mcp`, `pnpm run build` = typecheck + тесты без backend + dry-run, затем `wrangler deploy --keep-vars`). Ранее раскрытый ключ не отозван автоматически — это должен сделать владелец.
 
 ## Адрес
 
-Предполагаемый будущий endpoint при использовании того же workers.dev subdomain:
+Endpoint:
 
 `https://rafinad-roadmap-mcp.ezhirov-es.workers.dev/mcp`
 
-Это проектируемый адрес, не подтверждение существующего сервиса. Если Cloudflare выделит другой адрес, измените `MCP_RESOURCE`, OAuth audience/resource и адрес подключения одновременно.
+Если адрес изменится, измените `MCP_RESOURCE`, Auth0 API Identifier (audience) и адрес подключения в ChatGPT одновременно.
 
 Discovery: `/.well-known/oauth-protected-resource/mcp` (также поддержан вариант без `/mcp`). Без обязательной конфигурации сервер возвращает 503; без действительного OAuth token `/mcp` возвращает 401.
 
@@ -40,11 +40,37 @@ Discovery: `/.well-known/oauth-protected-resource/mcp` (также поддер�
 | `ENABLE_WRITES` | Только строка `true` включает запись; иначе только чтение |
 | `RAFINAD_API_KEY` | Только Cloudflare Worker Secret; никогда не переменная в Git |
 
-Worker проверяет подпись ES256/RS256, `iss`, `aud`, `sub`, `exp`, `iat`, `client_id` (или `azp`) и scope на **каждом** запросе. Срок JWT — максимум 15 минут. Обязательный scope `roadmap:read`; для записи дополнительно `roadmap:write`. Если оба client claims присутствуют, они должны соответствовать настройке. ID token без нужного audience/scopes не подходит.
+Worker проверяет подпись ES256/RS256, `iss`, `aud`, `sub`, `exp`, `iat`, `client_id` (или `azp`) и scope на **каждом** запросе. Срок жизни JWT ограничен `OAUTH_MAX_TOKEN_AGE_SECONDS` (300–86400, по умолчанию 86400 — стандартный срок access token Auth0 custom API; прежний жёсткий предел 15 минут отклонял каждый токен Auth0). Неверное значение настройки закрывает сервер (503). Обязательный scope `roadmap:read`; для записи дополнительно `roadmap:write`. Если оба client claims присутствуют, они должны соответствовать настройке. ID token без нужного audience/scopes не подходит.
 
 Настройте провайдер так, чтобы OAuth `resource` превращался в нужный `aud`. Если провайдер требует отдельный `audience` или нестандартный claim scope, настройте его адаптацию до подключения: Worker не ослабляет проверки. Получите `sub` из админ-панели провайдера. OAuth client secret, если он нужен, вводится только в интерфейсе подключения ChatGPT; Worker его не хранит.
 
-Отзыв OAuth refresh token запрещает обновление, но уже выданный JWT может действовать до 15 минут. Для немедленного прекращения доступа остановите MCP Worker/измените допуск владельца. Отзыв ключа Roadmap применяется самим backend на следующем REST-запросе; ключ и права не кешируются. JWKS может кешироваться библиотекой для проверки подписи.
+Отзыв OAuth refresh token запрещает обновление, но уже выданный JWT может действовать до конца своего срока (не дольше `OAUTH_MAX_TOKEN_AGE_SECONDS`, по умолчанию 24 ч). Для более строгого режима уменьшите срок токена в Auth0 (API → Settings → Token Expiration) и задайте ту же величину в `OAUTH_MAX_TOKEN_AGE_SECONDS`. Для немедленного прекращения доступа остановите MCP Worker/измените допуск владельца. Отзыв ключа Roadmap применяется самим backend на следующем REST-запросе; ключ и права не кешируются. JWKS может кешироваться библиотекой для проверки подписи.
+
+## Auth0: соответствие настроек
+
+| Auth0 | Worker |
+| --- | --- |
+| APIs → custom API → **Identifier** | ровно `MCP_RESOURCE` (`https://rafinad-roadmap-mcp.ezhirov-es.workers.dev/mcp`) — попадает в `aud` |
+| Tenant domain с `https://` и завершающим `/` | `OAUTH_ISSUER` |
+| `https://<tenant>/.well-known/jwks.json` | `OAUTH_JWKS_URL` |
+| Applications → Regular Web Application → **Client ID** | `OAUTH_CLIENT_ID` (Auth0 кладёт его в `azp`) |
+| User Management → Users → **user_id** владельца | `OWNER_SUBJECT` (например `auth0|…`) |
+| API → Permissions: `roadmap:read` (и при необходимости `roadmap:write`), пользователю выданы, в Access Settings разрешён **User-delegated Access** | scope в токене |
+| API → Token Expiration | не больше `OAUTH_MAX_TOKEN_AGE_SECONDS` |
+
+ChatGPT при подключении сам находит Auth0 через `/.well-known/oauth-protected-resource/mcp`. В Regular Web Application должен быть разрешён callback URL, который показывает ChatGPT, а в запросе авторизации — `audience`/`resource`, равный `MCP_RESOURCE`, иначе Auth0 выдаст токен без нужного `aud`.
+
+## Диагностика
+
+`node mcp/scripts/diagnose.mjs` (или `pnpm diagnose` в `mcp`) проверяет опубликованный endpoint: discovery, 401 с `WWW-Authenticate`, CORS preflight от `https://chatgpt.com`. С переменной окружения `MCP_ACCESS_TOKEN` (только локально, не в Git/чате/истории shell) — ещё `initialize` и `tools/list`. Токен не печатается, redirect не выполняются.
+
+| Симптом | Что проверить |
+| --- | --- |
+| discovery/`/mcp` → 503 | Не заданы или неверны Variables/Secrets: `MCP_RESOURCE`, `OAUTH_ISSUER`, `OAUTH_JWKS_URL`, `OAUTH_CLIENT_ID`, `OWNER_SUBJECT`, `RAFINAD_API_KEY`, `OAUTH_MAX_TOKEN_AGE_SECONDS` |
+| вход в Auth0 успешен, но `/mcp` → 401 | Временно задайте Variable `AUTH_DIAGNOSTICS=true`, выполните `pnpm exec wrangler tail` в `mcp` и повторите подключение. В логе только категория `mcp_auth_denied`: `audience_mismatch` — Identifier API ≠ `MCP_RESOURCE`; `client_mismatch` — не тот Client ID; `owner_mismatch` — вошёл другой пользователь; `missing_read_scope` — нет `roadmap:read` или выключен User-delegated Access; `lifetime_too_long`/`token_too_old` — срок токена больше `OAUTH_MAX_TOKEN_AGE_SECONDS`; `issuer_mismatch` — `OAUTH_ISSUER` без/с лишним `/`; `invalid_signature`/`jwks_unavailable` — `OAUTH_JWKS_URL`. После диагностики удалите переменную |
+| ChatGPT пишет «not installed» / приложение не появилось | Это состояние подключения в ChatGPT, а не ошибка сервера: при успешных discovery, 401 и `initialize`/`tools/list` создайте или включите custom MCP приложение заново |
+
+CORS разрешён только для `https://chatgpt.com`, `https://chat.openai.com` и собственного origin сервера; preflight (`OPTIONS`) и OAuth metadata не требуют токена, ответ 401 читаем для браузера (`Access-Control-Expose-Headers: WWW-Authenticate`).
 
 ## Локальная установка и проверки
 
@@ -59,7 +85,7 @@ pnpm test
 pnpm build
 ```
 
-`build` запускает **только** `wrangler deploy --dry-run`; он не публикует Worker. Тесты подменяют сетевой транспорт локальным backend и создают временные тестовые ключи. Ни production key, ни Cloudflare credentials для них не нужны. JWT-ключевая пара создаётся в памяти тестового процесса.
+`build` — то, что запускает Cloudflare Workers Builds: проверка типов и тесты, которым не нужен корень репозитория (`typecheck:ci`, `test:ci`), затем `wrangler deploy --dry-run`; сам по себе он не публикует Worker (публикует отдельный шаг Workers Builds `wrangler deploy --keep-vars`). Полный набор с backend-тестом — `pnpm test` локально. Разрешения install-скриптов для pnpm 11 (`esbuild`, `workerd`) — в `mcp/pnpm-workspace.yaml`; без них установка в Workers Builds падала с `ERR_PNPM_IGNORED_BUILDS`. Тесты подменяют сетевой транспорт локальным backend и создают временные тестовые ключи. Ни production key, ни Cloudflare credentials для них не нужны. JWT-ключевая пара создаётся в памяти тестового процесса.
 
 Для локального запуска: `pnpm dev`. Без настроек сервер намеренно закрыт. `.dev.vars` игнорируется Git: в нём допустимы только тестовые секреты и настройки тестового OAuth tenant. Не копируйте production key для локальной проверки. MCP Inspector можно использовать после настройки тестового OAuth/HTTPS endpoint; это отдельная ручная проверка, не результат unit-тестов.
 

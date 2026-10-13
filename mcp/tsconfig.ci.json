@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  // CI (Cloudflare Workers Builds, root directory /mcp) has only this project's dependencies:
+  // the backend integration test needs the repository root installed and runs locally with `pnpm test`.
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["tests/backend.test.ts"]
+}

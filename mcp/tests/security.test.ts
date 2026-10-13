@@ -7,7 +7,7 @@ import { Roadmap } from '../src/roadmap';
 test('OAuth rejects missing, forged, expired, wrong issuer/audience/client/owner/scope tokens on every method', async () => {
   let fetched = 0;
   const fetcher = async () => { fetched++; return Response.json({}); };
-  const invalid = [undefined, 'forged', await token({ exp: 1 }), await token({ iss: 'https://evil.test' }), await token({ aud: 'other' }), await token({ sub: 'other' }), await token({ client_id: 'other' }), await token({ scope: '' }), await token({ exp: Math.floor(Date.now() / 1000) + 3600 })];
+  const invalid = [undefined, 'forged', await token({ exp: 1 }), await token({ iss: 'https://evil.test' }), await token({ aud: 'other' }), await token({ sub: 'other' }), await token({ client_id: 'other' }), await token({ scope: '' }), await token({ exp: Math.floor(Date.now() / 1000) + 2 * 86400 })]; // longer than the bounded 24 h ceiling (auth-policy.ts)
   for (const t of invalid) for (const method of ['GET', 'POST', 'DELETE']) {
     const res = await handle(new Request(env.MCP_RESOURCE, { method, headers: t ? { authorization: `Bearer ${t}` } : {} }), env, { keys, fetcher });
     assert.equal(res.status, 401);

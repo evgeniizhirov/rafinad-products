@@ -1,0 +1,9 @@
+# Settings for this standalone project (no workspace packages).
+# pnpm 11 stops the install when a dependency's build script is neither allowed nor denied
+# (ERR_PNPM_IGNORED_BUILDS) — that failed the Cloudflare Workers Build. esbuild and workerd come with wrangler;
+# their install scripts only fetch/validate the platform binary.
+allowBuilds:
+  esbuild: true
+  workerd: true
+# Safety net for pnpm versions without allowBuilds: an unapproved build script is reported, not fatal.
+strictDepBuilds: false
