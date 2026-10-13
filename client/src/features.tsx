@@ -5,12 +5,16 @@ import { api, ApiError, invalidate, mutate, openFeature, toast, useApi, useApp, 
 import { Cubes, Field, Modal, ReasonModal, ScoreCell, StatusPill, useDirty, VisBadge } from './ui';
 
 export const KIND_LABEL: Record<string, string> = { planned: 'Плановая', bug: 'Баг', operational_improvement: 'Оперативная доработка' };
+export const URGENCY_LABEL: Record<string, string> = { low: 'низкая', medium: 'средняя', high: 'высокая', critical: 'критическая' };
+/** bugs use the ordinary status; this is how its semantic reads for a bug */
+export const BUG_STATE: Record<string, string> = { new: 'не решено', analysis: 'не решено', ready: 'не решено', planned: 'не решено', in_progress: 'в работе', blocked: 'в работе (блок)', postponed: 'отложено', done: 'решено', cancelled: 'отменено' };
 
 /** work type + hidden Product task markers (nothing for an ordinary planned task) */
 export function KindBadges({ f }: { f: any }) {
   return (
     <>
       {f.task_kind && f.task_kind !== 'planned' && <span className={`pill ${f.task_kind === 'bug' ? 'danger' : 'warn'}`} style={{ marginRight: 6, fontSize: 11 }}>{KIND_LABEL[f.task_kind]}</span>}
+      {f.task_kind && f.task_kind !== 'planned' && f.urgency && ['high', 'critical'].includes(f.urgency) && <span className="pill danger" style={{ marginRight: 6, fontSize: 11 }} title="Срочность">{URGENCY_LABEL[f.urgency]}</span>}
       {f.is_product_internal && <span className="pill outline" style={{ marginRight: 6, fontSize: 11 }} title="Видна только продуктовой команде и администраторам">Внутренняя продукта</span>}
     </>
   );
@@ -178,6 +182,9 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
     private_notes: feature?.private_notes ?? '',
     task_kind: feature?.task_kind ?? 'planned',
     is_product_internal: !!feature?.is_product_internal,
+    is_focus: !!feature?.is_focus,
+    urgency: feature?.urgency ?? '',
+    fact_hours: feature?.fact_hours ?? '',
     initiator_type: feature?.initiator?.type ?? '',
     initiator_name: feature?.initiator?.type === 'free_text' ? feature.initiator.name : '',
     initiator_user_id: feature?.initiator?.user_id ?? '',
@@ -197,6 +204,10 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
       requested_at: nul(v.requested_at), planned_start: nul(v.planned_start), planned_end: nul(v.planned_end), external_ref: nul(v.external_ref.trim()),
       tags: v.tags.split(',').map((t: string) => t.trim()).filter(Boolean), offer_ids: v.offer_ids, private_notes: nul(v.private_notes),
       task_kind: v.task_kind, is_product_internal: v.is_product_internal,
+      is_focus: v.task_kind === 'planned' && !v.is_product_internal ? v.is_focus : false,
+      ...(v.task_kind !== 'planned' || feature?.urgency || feature?.fact_hours != null
+        ? { urgency: v.urgency || null, fact_hours: v.fact_hours === '' ? null : Number(String(v.fact_hours).replace(',', '.')) }
+        : {}),
       initiator: v.initiator_type === 'free_text' ? { type: 'free_text', name: v.initiator_name.trim() }
         : v.initiator_type === 'user' ? { type: 'user', user_id: v.initiator_user_id }
         : v.initiator_type === 'department' ? { type: 'department', department_id: v.initiator_department_id }
@@ -255,6 +266,12 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
             <input type="checkbox" checked={v.is_product_internal} onChange={(e) => setV((s) => ({ ...s, is_product_internal: e.target.checked }))} />
             Внутренняя задача продукта
           </label>
+          {v.task_kind === 'planned' && !v.is_product_internal && (
+            <label className="check" title="Обязательство релиза перед бизнесом — показывается в целях спринта независимо от статуса">
+              <input type="checkbox" checked={v.is_focus} onChange={(e) => setV((s) => ({ ...s, is_focus: e.target.checked }))} />
+              Фокусная задача релиза
+            </label>
+          )}
         </Field>
         <Field label="Инициатор" hint="Кто попросил задачу — не автор карточки и не исполнитель">
           <select className="select" value={v.initiator_type} onChange={set('initiator_type')}>
@@ -316,7 +333,18 @@ export function FeatureForm({ feature, onClose, defaults }: { feature?: any; onC
         <Field label="Дата постановки"><input type="date" className="input" value={v.requested_at} onChange={set('requested_at')} /></Field>
         <Field label="Теги" hint="Через запятую"><input className="input" value={v.tags} onChange={set('tags')} /></Field>
         <Field label="Плановое начало"><input type="date" className="input" value={v.planned_start} onChange={set('planned_start')} /></Field>
-        <Field label="Плановое завершение"><input type="date" className="input" value={v.planned_end} onChange={set('planned_end')} /></Field>
+        <Field label={v.task_kind === 'planned' ? 'Плановое завершение' : 'Плановая дата устранения'} hint={v.task_kind === 'planned' ? undefined : 'Без даты задача не попадает на диаграмму Ганта'}><input type="date" className="input" value={v.planned_end} onChange={set('planned_end')} /></Field>
+        {v.task_kind !== 'planned' && (
+          <>
+            <Field label="Срочность" hint="Не межотдельный приоритет — только для багов и доработок">
+              <select className="select" value={v.urgency} onChange={set('urgency')}>
+                <option value="">Не указана</option>
+                {Object.entries(URGENCY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </Field>
+            <Field label="Факт часов" hint="Заполняется после устранения, только для аналитики"><input className="input" inputMode="decimal" value={v.fact_hours} onChange={set('fact_hours')} /></Field>
+          </>
+        )}
         <Field label="Связанные офферы" span2>
           <div className="row wrap" style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: 8, gap: 6 }}>
             {(offers.data?.offers ?? []).map((o: any) => (

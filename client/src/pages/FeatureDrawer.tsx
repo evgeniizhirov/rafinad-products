@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { I } from '../icons';
-import { FeatureForm, FeaturePicker, KIND_LABEL, usePlacement, VoteControl } from '../features';
-import { fmtDate, fmtDateTime, fmtH, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
-import { Cubes, Empty, ErrorBox, Loading, Modal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
+import { BUG_STATE, FeatureForm, FeaturePicker, KIND_LABEL, URGENCY_LABEL, usePlacement, VoteControl } from '../features';
+import { api, ApiError, fmtDate, fmtDateTime, fmtH, invalidate, mutate, navigate, openFeature, toast, useApi, useApp, useDict, useQueryParam } from '../lib';
+import { Cubes, Empty, ErrorBox, Loading, Modal, ReasonModal, RichText, StatusPill, Tabs, VisBadge } from '../ui';
 
 type Tab = 'about' | 'priority' | 'resources' | 'links' | 'history';
 
@@ -84,23 +84,53 @@ function DrawerContent({ featureKey, tab, setTab, close }: { featureKey: string;
 function About({ f }: { f: any }) {
   const { me } = useApp();
   const [comment, setComment] = useState('');
+  const canEditCard = !!me?.permissions.edit_catalog && !me.must_change_password;
   return (
     <div className="stack loose">
       <RichText text={f.description} />
       <dl className="dl">
-        <dt>Приоритет</dt>
-        <dd><Cubes score={f.priority.score} /> <span className="muted small">{f.priority.voters ? `оценили ${f.priority.voters}` : 'отделы ещё не голосовали'}</span></dd>
+        {(f.task_kind ?? 'planned') === 'planned' && (
+          <>
+            <dt>Приоритет</dt>
+            <dd><Cubes score={f.priority.score} /> <span className="muted small">{f.priority.voters ? `оценили ${f.priority.voters}` : 'отделы ещё не голосовали'}</span></dd>
+          </>
+        )}
         <dt>Эпик</dt>
         <dd>{f.epic ? (f.epic.hidden ? <span className="muted">Внутренний эпик</span> : f.epic.title) : <span className="muted">Без эпика</span>}</dd>
         <dt>Категория</dt>
         <dd>{f.category?.name ?? <span className="muted">—</span>}</dd>
         {f.tags.length > 0 && (<><dt>Теги</dt><dd className="row wrap">{f.tags.map((t: string) => <span key={t} className="tag">{t}</span>)}</dd></>)}
-        <dt>Плановый период</dt>
-        <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
-        <dt>Релиз</dt>
-        <dd>{f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}</dd>
+        {((f.task_kind ?? 'planned') === 'planned' || f.period) && (
+          <>
+            <dt>Плановый период</dt>
+            <dd>{f.period ? <>{f.period.name}{f.placement_locked && <span className="muted small"> (утверждено)</span>}</> : <span className="muted">Не запланирована</span>}</dd>
+          </>
+        )}
+        <dt>Релиз → спринт</dt>
+        <dd>
+          {f.release ? <a className="link" href={`/releases/${f.release.id}`} onClick={(e) => { e.preventDefault(); navigate(`/releases/${f.release.id}`); }} style={{ color: 'var(--info)' }}>{f.release.name}</a> : <span className="muted">Не включена</span>}
+          {f.sprint && <> → спринт <b>{f.sprint.code}</b> <span className="muted small">({fmtDate(f.sprint.start_date, false)} — {fmtDate(f.sprint.end_date)}){f.task_kind !== 'planned' ? ', справочно' : ''}</span></>}
+          {f.is_focus && <span className="pill beet" style={{ marginLeft: 6 }}>фокус релиза</span>}
+        </dd>
+        {f.task_kind === 'planned' && (<><dt>Плановая выкладка</dt><dd>{f.planned_production_date ? fmtDate(f.planned_production_date) : <span className="muted">—</span>}{f.baseline_production_date && f.baseline_production_date !== f.planned_production_date && <span className="muted small"> (обещали {fmtDate(f.baseline_production_date)})</span>}</dd></>)}
         <dt>Тип работы</dt>
-        <dd>{KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}</dd>
+        <dd>
+          {KIND_LABEL[f.task_kind ?? 'planned']}{f.is_product_internal && <span className="pill outline" style={{ marginLeft: 6 }}>Внутренняя задача продукта</span>}
+          {f.task_kind && f.task_kind !== 'planned' && canEditCard && (
+            <button className="btn ghost sm" style={{ marginLeft: 6 }} onClick={async () => {
+              if (!window.confirm('Перевести в плановую задачу? Она начнёт участвовать в планировании, оценках и релизах; справочный спринт будет снят.')) return;
+              await mutate(`/features/${f.id}`, 'PATCH', { task_kind: 'planned', version: f.version }, 'Задача переведена в плановые');
+            }}>Перевести в плановую</button>
+          )}
+        </dd>
+        {f.task_kind && f.task_kind !== 'planned' && (
+          <>
+            <dt>Состояние</dt><dd>{BUG_STATE[f.status?.semantic ?? 'new']}{f.closed_at ? `, устранено ${fmtDate(f.closed_at)}` : ''}</dd>
+            <dt>Срочность</dt><dd>{f.urgency ? URGENCY_LABEL[f.urgency] : <span className="muted">не указана</span>}</dd>
+            <dt>Срок устранения</dt><dd>{f.planned_end ? fmtDate(f.planned_end) : <span className="muted">не указан</span>}</dd>
+            {f.fact_hours != null && (<><dt>Факт часов</dt><dd>{f.fact_hours} ч</dd></>)}
+          </>
+        )}
         {f.initiator !== undefined && (
           <>
             <dt>Инициатор</dt>
@@ -249,6 +279,7 @@ function Resources({ f }: { f: any }) {
           <span className="small muted">Пустое поле — «не оценено», а не ноль. Ноль — команда не нужна.</span>
         </div>
       )}
+      <ScheduleSection f={f} canEdit={canEdit} />
       <section className="stack">
         <h3 style={{ fontSize: 15 }}>Плановый период</h3>
         {canPlan ? (
@@ -270,6 +301,83 @@ function Resources({ f }: { f: any }) {
       </section>
       {modal}
     </div>
+  );
+}
+
+/** Release → sprint → planned production date (FR-06). Bugs keep a sprint only as a reference. */
+function ScheduleSection({ f, canEdit }: { f: any; canEdit: boolean }) {
+  const releases = useApi<any>(canEdit ? '/releases' : null);
+  const sprintsQ = useApi<any>(canEdit ? '/sprints' : null);
+  const planned = f.task_kind === 'planned';
+  const [v, setV] = useState({ release_id: f.release?.id ?? '', sprint_id: f.sprint?.id ?? '', date: '' });
+  const [pending, setPending] = useState<any | null>(null);
+  useEffect(() => {
+    setV({ release_id: f.release?.id ?? '', sprint_id: f.sprint?.id ?? '', date: '' });
+  }, [f.id, f.version]);
+  if (!canEdit || f.is_product_internal) return null;
+  const sprints = (sprintsQ.data?.sprints ?? []).filter((s: any) => s.status !== 'closed' || s.id === f.sprint?.id);
+  const ofRelease = planned && v.release_id ? sprints.filter((s: any) => s.release_id === v.release_id) : sprints;
+  const sprint = sprints.find((s: any) => s.id === v.sprint_id);
+  const send = async (extra: Record<string, unknown> = {}) => {
+    const body: Record<string, unknown> = { sprint_id: v.sprint_id || null, version: f.version, ...extra };
+    if (planned) body.release_id = v.release_id || null;
+    if (planned && v.date) body.planned_production_date = v.date;
+    try {
+      await api(`/features/${f.id}/schedule`, { method: 'PATCH', body });
+      invalidate();
+      toast('План задачи обновлён');
+    } catch (e) {
+      if (e instanceof ApiError && (e.code === 'approved' || e.code === 'over_budget')) setPending({ ...body, __code: e.code, __over: e.details?.over ?? [] });
+      else { toast((e as Error).message, 'error'); invalidate(); }
+    }
+  };
+  const changed = v.release_id !== (f.release?.id ?? '') || v.sprint_id !== (f.sprint?.id ?? '') || !!v.date;
+  return (
+    <section className="stack">
+      <h3 style={{ fontSize: 15 }}>{planned ? 'Релиз, спринт и выкладка' : 'Спринт (справочно)'}</h3>
+      {!planned && <p className="small muted">Баги и оперативные доработки не входят в план спринта и релиза — спринт указывает, в ходе какого спринта идёт исправление.</p>}
+      <div className="row wrap">
+        {planned && (
+          <select className="select" style={{ maxWidth: 220 }} value={v.release_id} onChange={(e) => setV({ release_id: e.target.value, sprint_id: '', date: '' })} aria-label="Релиз">
+            <option value="">Без релиза</option>
+            {(releases.data?.releases ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+        <select className="select" style={{ maxWidth: 260 }} value={v.sprint_id} onChange={(e) => {
+          const s = sprints.find((x: any) => x.id === e.target.value);
+          setV((x) => ({ ...x, sprint_id: e.target.value, release_id: planned && s ? s.release_id : x.release_id }));
+        }} aria-label="Спринт">
+          <option value="">Без спринта</option>
+          {ofRelease.map((s: any) => <option key={s.id} value={s.id}>Спринт {s.code} · {fmtDate(s.start_date, false)} — {fmtDate(s.end_date)}</option>)}
+        </select>
+        {planned && (
+          <label className="row small" title="Пусто — срок выкладки спринта">
+            выкладка
+            <input type="date" className="input sm" value={v.date} placeholder={sprint?.production_due ?? ''} onChange={(e) => setV((x) => ({ ...x, date: e.target.value }))} />
+          </label>
+        )}
+        <button className="btn primary sm" disabled={!changed} onClick={() => send()}>Сохранить</button>
+      </div>
+      {planned && sprint && <div className="small muted">Разработка {fmtDate(sprint.start_date, false)} — {fmtDate(sprint.end_date)}, тестирование с {fmtDate(sprint.testing_start)}, выкладка до {fmtDate(sprint.production_due)}.</div>}
+      {pending && (
+        <ReasonModal
+          title={pending.__code === 'over_budget' ? 'Превышение бюджета или ёмкости' : 'Релиз утверждён'}
+          confirmText={pending.__code === 'over_budget' ? 'Включить с превышением' : 'Изменить состав'}
+          onClose={() => setPending(null)}
+          onConfirm={async (reason) => {
+            const { __code, __over, ...p } = pending;
+            setPending(null);
+            await send({ ...p, reason, ...(__code === 'over_budget' ? { confirm_over_budget: true } : { confirm_approved_change: true }) });
+          }}
+        >
+          {pending.__code === 'over_budget' ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {pending.__over.map((o: any, i: number) => <li key={i}>{o.kind === 'budget' ? `${o.month}: бюджет ${Math.round(o.value).toLocaleString('ru-RU')} ₽ при лимите ${Math.round(o.limit).toLocaleString('ru-RU')} ₽` : `Спринт ${o.sprint}, ${o.team}: ${o.value} ч при доступных ${o.limit} ч`}</li>)}
+            </ul>
+          ) : <p>Задача меняет состав утверждённого релиза. Укажите причину — она попадёт в журнал.</p>}
+        </ReasonModal>
+      )}
+    </section>
   );
 }
 
@@ -296,6 +404,59 @@ function RefList({ title, items, onRemove }: { title: string; items: any[]; onRe
   );
 }
 
+/** FR-03: what we wait for from the business, from whom and since when */
+function BusinessBlockers({ f, canEdit }: { f: any; canEdit: boolean }) {
+  const { meta } = useApp();
+  const [form, setForm] = useState<{ expectation: string; owner_department_id: string; owner_name: string; started_at: string; due_at: string } | null>(null);
+  const list = f.business_blockers ?? [];
+  if (!list.length && !canEdit) return null;
+  const save = async () => {
+    const r = await mutate(`/features/${f.id}/blockers`, 'POST', {
+      expectation: form!.expectation, owner_department_id: form!.owner_department_id || null, owner_name: form!.owner_name || null,
+      ...(form!.started_at ? { started_at: form!.started_at } : {}), due_at: form!.due_at || null,
+    }, 'Блокер добавлен');
+    if (r) setForm(null);
+  };
+  return (
+    <div className="stack tight">
+      <div className="row"><div className="small muted grow">Ждём от бизнеса</div>{canEdit && !form && <button className="btn ghost sm" onClick={() => setForm({ expectation: '', owner_department_id: '', owner_name: '', started_at: '', due_at: '' })}><I.plus />Блокер</button>}</div>
+      {list.length === 0 && !form && <div className="small muted">Внешних ожиданий нет</div>}
+      {list.map((b: any) => (
+        <div key={b.id} className="row" style={{ alignItems: 'flex-start', padding: '4px 0' }}>
+          <div className="grow small">
+            <b>{b.expectation}</b>
+            <div className="muted">от {b.owner_department?.name ?? b.owner_name}{b.owner_department && b.owner_name ? ` (${b.owner_name})` : ''} · с {fmtDate(b.started_at)}{b.due_at ? ` · ответ до ${fmtDate(b.due_at)}` : ''}</div>
+          </div>
+          {canEdit && <button className="btn ghost sm" onClick={() => {
+            const resolution = window.prompt('Чем закончилось ожидание? (необязательно)') ?? undefined;
+            mutate(`/blockers/${b.id}`, 'PATCH', { resolved: true, resolution: resolution || null, version: b.version }, 'Блокер снят');
+          }}>Снять</button>}
+        </div>
+      ))}
+      {form && (
+        <div className="stack tight" style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
+          <input className="input" placeholder="Что ожидаем: вводные, согласование, решение…" value={form.expectation} onChange={(e) => setForm({ ...form, expectation: e.target.value })} autoFocus />
+          <div className="row wrap">
+            <select className="select" value={form.owner_department_id} onChange={(e) => setForm({ ...form, owner_department_id: e.target.value })} aria-label="Отдел">
+              <option value="">Отдел не указан</option>
+              {meta.departments.filter((d) => d.is_active).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <input className="input" style={{ maxWidth: 220 }} placeholder="Кто именно (ФИО)" value={form.owner_name} onChange={(e) => setForm({ ...form, owner_name: e.target.value })} />
+          </div>
+          <div className="row wrap small">
+            <label className="row">ждём с <input type="date" className="input sm" value={form.started_at} onChange={(e) => setForm({ ...form, started_at: e.target.value })} /></label>
+            <label className="row">ответ до <input type="date" className="input sm" value={form.due_at} onChange={(e) => setForm({ ...form, due_at: e.target.value })} /></label>
+          </div>
+          <div className="row">
+            <button className="btn primary sm" disabled={!form.expectation.trim() || (!form.owner_department_id && !form.owner_name.trim())} onClick={save}>Добавить</button>
+            <button className="btn ghost sm" onClick={() => setForm(null)}>Отмена</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Links({ f }: { f: any }) {
   const { me } = useApp();
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
@@ -306,6 +467,7 @@ function Links({ f }: { f: any }) {
   const empty = !Object.values(r).flat().length && !f.offers.length;
   return (
     <div className="stack loose">
+      <BusinessBlockers f={f} canEdit={canEdit} />
       {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку, связанную задачу или оффер.' : null}</Empty>}
       <RefList title="Блокирует" items={r.blocks} onRemove={remove} />
       <RefList title="Заблокирована задачами" items={r.blocked_by} onRemove={remove} />

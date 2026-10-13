@@ -4,6 +4,7 @@ import { auditStmt, diffFields } from '../lib/audit';
 import { ANY_LOCKED_SQL, planAlertIfStmt } from '../lib/alerts';
 import { hashPassword, randomToken, sha256Hex, tempPassword } from '../lib/crypto';
 import { abortIf, all, first, guardVersion, newId, nowIso, placeholders, stmt, tx, type Row } from '../lib/db';
+import { parseSpreadsheetId } from '../lib/google';
 import { badRequest, conflict, json, notFound, readJson, type Ctx, type Router } from '../lib/http';
 
 const roleEnum = z.enum(['department_lead', 'product', 'admin']);
@@ -259,6 +260,16 @@ export function registerAdminRoutes(r: Router) {
       public_show_estimates: z.boolean().optional(),
       public_show_capacity: z.boolean().optional(),
       planning_horizon: z.number().int().min(1).max(24).optional(),
+      // calendar generator (FR-06): reference sprint start (a Wednesday) and its release number
+      calendar_anchor_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 3, 'Опорная дата должна быть средой').optional(),
+      calendar_anchor_release: z.number().int().min(1).max(10000).optional(),
+      calendar_releases_ahead: z.number().int().min(1).max(12).optional(),
+      calendar_months_ahead: z.number().int().min(1).max(36).optional(),
+      // FR-08: the only spreadsheet the export may write to (its «Import» tab), and who may write there
+      export_google_spreadsheet_id: z.string().trim().max(300).transform((v) => (v ? parseSpreadsheetId(v) ?? '#invalid' : '')).refine((v) => v !== '#invalid', 'Укажите ссылку на Google-таблицу или её ID').optional(),
+      budget_allocation: z.enum(['workdays', 'calendar_days']).optional(),
+      analytics_high_priority: z.number().min(1).max(5).optional(),
+      export_google_roles: z.array(z.enum(['department_lead', 'product', 'admin'])).min(1).transform((v) => v.join(',')).optional(),
     }));
     const db = ctx.env.DB;
     const statements = [];

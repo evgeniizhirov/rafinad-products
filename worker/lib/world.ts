@@ -50,6 +50,10 @@ export interface World {
   releaseFeatures: Row[];
   /** id, name, is_active — for initiator names (never sent to guests) */
   users: Row[];
+  sprints: Row[];
+  months: Row[];
+  /** business blockers (FR-03): what we wait for, from whom, since when */
+  blockers: Row[];
 }
 
 /**
@@ -78,6 +82,7 @@ export function withoutProductInternal(w: World): World {
     featureOffers: w.featureOffers.filter((x) => keep(x.feature_id)),
     relations: w.relations.filter((x) => keep(x.from_id) && keep(x.to_id)),
     releaseFeatures: w.releaseFeatures.filter((x) => keep(x.feature_id)),
+    blockers: w.blockers.filter((x) => keep(x.feature_id)),
   };
 }
 
@@ -103,6 +108,9 @@ async function loadAll(db: D1Database): Promise<World> {
     q('SELECT * FROM releases ORDER BY planned_date IS NULL, planned_date, name'),
     q('SELECT * FROM release_features'),
     q('SELECT id, name, is_active FROM users'),
+    q('SELECT * FROM sprints ORDER BY start_date, ordinal'),
+    q('SELECT * FROM accounting_months ORDER BY month'),
+    q('SELECT * FROM feature_blockers ORDER BY started_at, created_at'),
   ]);
   const r = (i: number) => (res[i].results ?? []) as Row[];
   const settings: Record<string, string> = {};
@@ -110,7 +118,7 @@ async function loadAll(db: D1Database): Promise<World> {
   return {
     departments: r(0), teams: r(1), categories: r(2), statuses: r(3), stages: r(4), periods: r(5), capacities: r(6), settings,
     epics: r(8), features: r(9), estimates: r(10), votes: r(11), tags: r(12), offers: r(13), featureOffers: r(14),
-    relations: r(15), releases: r(16), releaseFeatures: r(17), users: r(18),
+    relations: r(15), releases: r(16), releaseFeatures: r(17), users: r(18), sprints: r(19), months: r(20), blockers: r(21),
   };
 }
 
@@ -127,6 +135,8 @@ export interface Indexes {
   offer: Map<string, Row>;
   release: Map<string, Row>;
   period: Map<string, Row>;
+  sprint: Map<string, Row>;
+  openBlockersBy: Map<string, Row[]>;
   estimatesBy: Map<string, Row[]>;
   votesBy: Map<string, Row[]>;
   tagsBy: Map<string, string[]>;
@@ -186,6 +196,8 @@ export function indexWorld(w: World): Indexes {
     offer: new Map(w.offers.map((s) => [s.id, s])),
     release: new Map(w.releases.map((s) => [s.id, s])),
     period: new Map(w.periods.map((s) => [s.id, s])),
+    sprint: new Map(w.sprints.map((s) => [s.id, s])),
+    openBlockersBy: groupBy(w.blockers.filter((b) => !b.resolved_at), (b) => b.feature_id),
     estimatesBy: groupBy(w.estimates, (e) => e.feature_id),
     votesBy,
     tagsBy,
@@ -208,6 +220,14 @@ export function featureRef(f: Row | undefined, viewer: Viewer, idx: Indexes) {
     id: f.id, number: f.number, key: `RF-${f.number}`, title: f.title, status: statusDto(idx.status.get(f.status_id)),
     ...(viewer === 'guest' ? {} : { visibility: f.visibility }),
   };
+}
+
+/** sprint as seen from a task: hidden when its release is not visible to the viewer */
+export function sprintRef(s: Row | undefined, viewer: Viewer, idx: Indexes) {
+  if (!s) return null;
+  const rel = idx.release.get(s.release_id);
+  if (!rel || !canSee(viewer, rel.visibility)) return null;
+  return { id: s.id, code: s.code, ordinal: s.ordinal, release_id: s.release_id, start_date: s.start_date, end_date: s.end_date, testing_start: s.testing_start, production_due: s.production_due, status: s.status };
 }
 
 export function showEstimates(viewer: Viewer, w: World) {
@@ -253,6 +273,10 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
     planned_end: f.planned_end,
     closed_at: f.closed_at,
     period: period ? { id: period.id, name: period.name, start_date: period.start_date, end_date: period.end_date } : null,
+    sprint: sprintRef(f.sprint_id ? idx.sprint.get(f.sprint_id) : undefined, viewer, idx),
+    planned_production_date: f.planned_production_date ?? null,
+    urgency: f.urgency ?? null,
+    is_focus: bool(f.is_focus),
     placement_locked: bool(f.placement_locked),
     release: release && canSee(viewer, release.visibility)
       ? { id: release.id, name: release.name, version_label: release.version_label, planned_date: release.planned_date, approved: !!release.approved_at }
@@ -271,6 +295,8 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
   }
   dto.task_kind = f.task_kind ?? 'planned';
   if (viewer !== 'guest') {
+    dto.baseline_production_date = f.baseline_production_date ?? null;
+    dto.fact_hours = f.fact_hours ?? null;
     dto.is_product_internal = isProductInternal(f);
     dto.initiator = initiatorDto(f, w);
     dto.external_ref = f.external_ref;
@@ -298,6 +324,7 @@ export function featureDto(f: Row, viewer: Viewer, w: World, idx: Indexes, opts:
   }
   dto.relations = rel;
   dto.open_blockers = openBlockerIds(f, w, idx).length;
+  if (viewer !== 'guest') dto.business_blockers = (idx.openBlockersBy.get(f.id) ?? []).map((b) => blockerDto(b, w));
   return dto;
 }
 
@@ -333,7 +360,7 @@ export function hasFlag(flag: FeatureFlag, f: Row, w: World, idx: Indexes): bool
     case 'open':
       return true;
     case 'blocked':
-      return idx.status.get(f.status_id)?.semantic === 'blocked' || openBlockerIds(f, w, idx).length > 0;
+      return idx.status.get(f.status_id)?.semantic === 'blocked' || openBlockerIds(f, w, idx).length > 0 || (idx.openBlockersBy.get(f.id) ?? []).length > 0;
     case 'unvoted':
       return !(idx.votesBy.get(f.id) ?? []).length;
     case 'unestimated':
@@ -361,6 +388,15 @@ export const isPlannable = (f: Row) => (f.task_kind ?? 'planned') === 'planned' 
 
 export const TASK_KINDS = ['planned', 'bug', 'operational_improvement'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
+
+export function blockerDto(b: Row, w: World) {
+  const dep = b.owner_department_id ? w.departments.find((d) => d.id === b.owner_department_id) : null;
+  return {
+    id: b.id, feature_id: b.feature_id, expectation: b.expectation,
+    owner_department: dep ? { id: dep.id, name: dep.name } : null, owner_name: b.owner_name ?? null,
+    started_at: b.started_at, due_at: b.due_at ?? null, resolved_at: b.resolved_at ?? null, resolution: b.resolution ?? null, version: b.version,
+  };
+}
 
 export type InitiatorType = 'free_text' | 'user' | 'department';
 

@@ -59,6 +59,16 @@ export function releaseSummary(rel: Row, viewer: Viewer, w: World, idx: Indexes,
     overdue: !!overdue,
     blockers,
     feature_ids: visible.map((f) => f.id),
+    cycle_number: rel.cycle_number ?? null,
+    sprints: w.sprints.filter((s) => s.release_id === rel.id).sort((a, b) => a.ordinal - b.ordinal).map((s) => {
+      const inSprint = counted.filter((f) => f.sprint_id === s.id);
+      return {
+        id: s.id, code: s.code, ordinal: s.ordinal, start_date: s.start_date, end_date: s.end_date, testing_start: s.testing_start, production_due: s.production_due, status: s.status,
+        feature_count: inSprint.length, done_count: inSprint.filter((f) => idx.status.get(f.status_id)?.semantic === 'done').length,
+      };
+    }),
+    focus_count: counted.filter((f) => bool(f.is_focus)).length,
+    focus_done: done.filter((f) => bool(f.is_focus)).length,
     features: detail ? sortFeatures(visible, w, idx, 'priority').map((f) => featureDto(f, viewer, w, idx)) : undefined,
   };
 }
@@ -158,6 +168,11 @@ export function registerReleaseRoutes(r: Router) {
     const nums = new Map((await all(db, 'SELECT id, number FROM features')).map((f) => [f.id, `RF-${f.number}`]));
     const st = [guardVersion(db, 'releases', rel.id, b.version)];
     for (const id of removed) st.push(stmt(db, 'DELETE FROM release_features WHERE release_id = ? AND feature_id = ?', rel.id, id));
+    // a task that leaves a release leaves its sprint too (the sprint belongs to the release)
+    for (const id of [...removed, ...movedFrom.map((m) => m.feature_id)]) {
+      st.push(stmt(db, `UPDATE features SET sprint_id = NULL, planned_production_date = NULL, updated_at = ?, version = version + 1
+        WHERE id = ? AND sprint_id IS NOT NULL AND sprint_id NOT IN (SELECT id FROM sprints WHERE release_id = ?)`, nowIso(), id, removed.includes(id) ? '' : rel.id));
+    }
     for (const m of movedFrom) {
       st.push(stmt(db, 'DELETE FROM release_features WHERE feature_id = ?', m.feature_id));
       st.push(auditStmt(db, user, 'release', m.release_id, 'feature_moved_out', [{ field: 'features', old: nums.get(m.feature_id), new: null }], `Перенесено в «${rel.name}»`));

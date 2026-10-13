@@ -34,7 +34,9 @@ export const SHEET_COLUMNS: Record<SheetKey, { required: string[]; optional: str
   epics: { required: ['external_id', 'title'], optional: ['description', 'category', 'status', 'visibility'] },
   features: {
     required: ['external_id', 'title'],
-    optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'assignee', 'planned_end', 'closed_at', 'tags', 'visibility'],
+    optional: ['description', 'category', 'epic_external_id', 'status', 'stage', 'requested_at', 'assignee', 'planned_end', 'closed_at', 'tags', 'visibility',
+      // bugs / operational improvements (P05); task_kind, initiator and author are applied on creation only
+      'task_kind', 'urgency', 'fact_hours', 'initiator', 'author'],
   },
   offers: { required: ['external_id', 'name'], optional: ['description', 'category', 'status', 'visibility'] },
   relations: { required: ['from_type', 'from_external_id', 'relation_type', 'to_type', 'to_external_id'], optional: [] },
@@ -64,6 +66,8 @@ export interface SnapshotEntity {
   requested_at?: string | null;
   assignee_name?: string | null;
   planned_end?: string | null;
+  urgency?: string | null;
+  fact_hours?: number | null;
   tags?: string[];
   estimates?: Record<string, { hours: number; is_manual: number }>;
 }
@@ -79,6 +83,9 @@ export interface Snapshot {
   offers: SnapshotEntity[];
   relations: { type: string; from_id: string; to_id: string }[];
   featureOffers: { feature_id: string; offer_id: string }[];
+  /** for the initiator column: an exact name match becomes a link to a department / user */
+  departments?: { id: string; name: string }[];
+  users?: { id: string; name: string }[];
 }
 
 export type EntityType = 'epic' | 'feature' | 'offer' | 'relation' | 'sheet';
@@ -146,7 +153,26 @@ const FIELD_LABELS: Record<string, string> = {
   assignee_name: 'Исполнитель',
   planned_end: 'Срок',
   tags: 'Теги',
+  urgency: 'Срочность',
+  fact_hours: 'Факт часов',
 };
+
+export const URGENCIES = ['low', 'medium', 'high', 'critical'] as const;
+
+/** initiator cell → department / user when the name matches exactly one of them, otherwise free text */
+export function initiatorOf(raw: string, snap: Snapshot): { type: 'free_text' | 'user' | 'department'; id: string | null; name: string } | null {
+  const name = raw.trim();
+  if (!name) return null;
+  const k = lc(name);
+  const deps = (snap.departments ?? []).filter((d) => lc(d.name) === k);
+  if (deps.length === 1) return { type: 'department', id: deps[0].id, name: deps[0].name };
+  // «Мхитарян Дмитрий» and «Дмитрий Мхитарян» are the same person
+  const words = (s: string) => lc(s).split(/\s+/).filter(Boolean).sort().join(' ');
+  const users = (snap.users ?? []).filter((u) => words(u.name) === words(name));
+  if (users.length === 1) return { type: 'user', id: users[0].id, name: users[0].name };
+  return { type: 'free_text', id: null, name };
+}
+const KINDS = ['planned', 'bug', 'operational_improvement'];
 
 export const RELATION_TYPES = ['blocks', 'related_to', 'duplicate_of', 'affects_offer', 'belongs_to_epic'] as const;
 
@@ -388,6 +414,23 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
         if (has('tags')) {
           payload.tags = [...new Set(cell(row, 'tags', 500).split(',').map((t) => t.trim().slice(0, 40)).filter(Boolean))].sort();
         }
+        if (has('task_kind')) {
+          const k = lc(cell(row, 'task_kind', 40));
+          if (k && !KINDS.includes(k)) errors.push(`Неизвестный тип работы «${k}»`);
+          payload.task_kind = k || 'planned';
+        }
+        if (has('urgency')) {
+          const u = lc(cell(row, 'urgency', 40));
+          payload.urgency = (URGENCIES as readonly string[]).includes(u) ? u : null;
+          if (u && !payload.urgency) warnings.push(`Неизвестная срочность «${u}»`);
+        }
+        if (has('fact_hours')) {
+          const raw = cell(row, 'fact_hours', 50);
+          const h = raw ? parseHours(raw) : { value: null };
+          payload.fact_hours = h.value;
+        }
+        if (has('initiator')) payload.initiator = initiatorOf(cell(row, 'initiator', 200), snap);
+        if (has('author')) payload.author_name = cell(row, 'author', 120) || null;
         const estimates: Record<string, number> = {};
         for (const [col, teamId] of hoursCols) {
           const i = idx.get(col);
@@ -528,6 +571,8 @@ function localValues(type: string, e: SnapshotEntity, L: Lookup): Record<string,
     v.requested_at = e.requested_at ?? null;
     v.assignee_name = e.assignee_name ?? null;
     v.planned_end = e.planned_end ?? null;
+    v.urgency = e.urgency ?? null;
+    v.fact_hours = e.fact_hours ?? null;
     v.tags = tagsKey(e.tags ?? []);
     for (const [teamId, est] of Object.entries(e.estimates ?? {})) v[`hours:${teamId}`] = est.hours;
   }
@@ -551,6 +596,8 @@ export function sourceValues(type: string, payload: Record<string, any>): Record
     v.requested_at = payload.requested_at;
     v.assignee_name = payload.assignee_name;
     v.planned_end = payload.planned_end;
+    v.urgency = payload.urgency;
+    v.fact_hours = payload.fact_hours;
     v.tags = payload.tags === undefined ? undefined : tagsKey(payload.tags);
     for (const [teamId, h] of Object.entries(payload.estimates ?? {})) v[`hours:${teamId}`] = h;
   }
@@ -580,6 +627,7 @@ function diffEntity(
     if (field === 'category_id') return L.categoryName.get(String(v)) ?? String(v);
     if (field === 'status_id') return L.statusName.get(String(v)) ?? String(v);
     if (field === 'stage_id') return L.stageName.get(String(v)) ?? String(v);
+    if (field === 'urgency') return ({ low: 'низкая', medium: 'средняя', high: 'высокая', critical: 'критическая' } as Record<string, string>)[String(v)] ?? String(v);
     if (field === 'epic') {
       const s = String(v);
       if (s.startsWith('id:')) return L.entities.epic.get(s.slice(3))?.title ?? s;
@@ -589,7 +637,7 @@ function diffEntity(
     return undefined;
   };
 
-  const descriptive = ['title', 'description', 'category_id', ...(type === 'feature' ? ['epic', 'requested_at', 'assignee_name', 'planned_end', 'tags'] : [])];
+  const descriptive = ['title', 'description', 'category_id', ...(type === 'feature' ? ['epic', 'requested_at', 'assignee_name', 'planned_end', 'tags', 'urgency', 'fact_hours'] : [])];
   const protectedFields = ['status_id', ...(type === 'feature' ? ['stage_id'] : [])];
 
   for (const f of descriptive) {
