@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
+    "test:ci": "tsx --test tests/security.test.ts tests/client.test.ts tests/auth0-compat.test.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:ci": "tsc -p tsconfig.ci.json",
     "dev": "wrangler dev",
-    "build": "wrangler deploy --dry-run --outdir dist"
+    "dryrun": "wrangler deploy --dry-run --outdir dist",
+    "build": "pnpm run typecheck:ci && pnpm run test:ci && pnpm run dryrun",
+    "diagnose": "node scripts/diagnose.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",
