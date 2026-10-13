@@ -391,6 +391,59 @@ function RefList({ title, items, onRemove }: { title: string; items: any[]; onRe
   );
 }
 
+/** FR-03: what we wait for from the business, from whom and since when */
+function BusinessBlockers({ f, canEdit }: { f: any; canEdit: boolean }) {
+  const { meta } = useApp();
+  const [form, setForm] = useState<{ expectation: string; owner_department_id: string; owner_name: string; started_at: string; due_at: string } | null>(null);
+  const list = f.business_blockers ?? [];
+  if (!list.length && !canEdit) return null;
+  const save = async () => {
+    const r = await mutate(`/features/${f.id}/blockers`, 'POST', {
+      expectation: form!.expectation, owner_department_id: form!.owner_department_id || null, owner_name: form!.owner_name || null,
+      ...(form!.started_at ? { started_at: form!.started_at } : {}), due_at: form!.due_at || null,
+    }, 'Блокер добавлен');
+    if (r) setForm(null);
+  };
+  return (
+    <div className="stack tight">
+      <div className="row"><div className="small muted grow">Ждём от бизнеса</div>{canEdit && !form && <button className="btn ghost sm" onClick={() => setForm({ expectation: '', owner_department_id: '', owner_name: '', started_at: '', due_at: '' })}><I.plus />Блокер</button>}</div>
+      {list.length === 0 && !form && <div className="small muted">Внешних ожиданий нет</div>}
+      {list.map((b: any) => (
+        <div key={b.id} className="row" style={{ alignItems: 'flex-start', padding: '4px 0' }}>
+          <div className="grow small">
+            <b>{b.expectation}</b>
+            <div className="muted">от {b.owner_department?.name ?? b.owner_name}{b.owner_department && b.owner_name ? ` (${b.owner_name})` : ''} · с {fmtDate(b.started_at)}{b.due_at ? ` · ответ до ${fmtDate(b.due_at)}` : ''}</div>
+          </div>
+          {canEdit && <button className="btn ghost sm" onClick={() => {
+            const resolution = window.prompt('Чем закончилось ожидание? (необязательно)') ?? undefined;
+            mutate(`/blockers/${b.id}`, 'PATCH', { resolved: true, resolution: resolution || null, version: b.version }, 'Блокер снят');
+          }}>Снять</button>}
+        </div>
+      ))}
+      {form && (
+        <div className="stack tight" style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
+          <input className="input" placeholder="Что ожидаем: вводные, согласование, решение…" value={form.expectation} onChange={(e) => setForm({ ...form, expectation: e.target.value })} autoFocus />
+          <div className="row wrap">
+            <select className="select" value={form.owner_department_id} onChange={(e) => setForm({ ...form, owner_department_id: e.target.value })} aria-label="Отдел">
+              <option value="">Отдел не указан</option>
+              {meta.departments.filter((d) => d.is_active).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <input className="input" style={{ maxWidth: 220 }} placeholder="Кто именно (ФИО)" value={form.owner_name} onChange={(e) => setForm({ ...form, owner_name: e.target.value })} />
+          </div>
+          <div className="row wrap small">
+            <label className="row">ждём с <input type="date" className="input sm" value={form.started_at} onChange={(e) => setForm({ ...form, started_at: e.target.value })} /></label>
+            <label className="row">ответ до <input type="date" className="input sm" value={form.due_at} onChange={(e) => setForm({ ...form, due_at: e.target.value })} /></label>
+          </div>
+          <div className="row">
+            <button className="btn primary sm" disabled={!form.expectation.trim() || (!form.owner_department_id && !form.owner_name.trim())} onClick={save}>Добавить</button>
+            <button className="btn ghost sm" onClick={() => setForm(null)}>Отмена</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Links({ f }: { f: any }) {
   const { me } = useApp();
   const canEdit = !!me?.permissions.edit_catalog && !me.must_change_password;
@@ -401,6 +454,7 @@ function Links({ f }: { f: any }) {
   const empty = !Object.values(r).flat().length && !f.offers.length;
   return (
     <div className="stack loose">
+      <BusinessBlockers f={f} canEdit={canEdit} />
       {empty && <Empty title="Связей нет">{canEdit ? 'Добавьте блокировку, связанную задачу или оффер.' : null}</Empty>}
       <RefList title="Блокирует" items={r.blocks} onRemove={remove} />
       <RefList title="Заблокирована задачами" items={r.blocked_by} onRemove={remove} />

@@ -435,3 +435,21 @@ table.data td.c, table.data th.c { text-align: center; }
   .load-row { grid-template-columns: 76px 1fr 96px; }
   .drawer-body { padding: 14px 16px 24px; }
 }
+
+/* ───── Gantt on the overview (FR-03) ───── */
+.gantt-row { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; align-items: center; border-top: 1px solid var(--line); cursor: pointer; }
+.gantt-row:hover { background: var(--surface-2, rgba(0,0,0,.02)); }
+.gantt-head { cursor: default; background: transparent !important; border-top: 0; }
+.gantt-label { padding: 6px 12px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gantt-track { position: relative; height: 36px; }
+.gantt-head .gantt-track { height: 24px; }
+.gantt-tick { position: absolute; top: 4px; font-size: 11px; color: var(--ink-3); transform: translateX(-50%); white-space: nowrap; }
+.gantt-tick::after { content: ''; position: absolute; left: 50%; top: 18px; height: 1000px; border-left: 1px dashed var(--line); pointer-events: none; }
+.gantt { position: relative; overflow-y: hidden; }
+.gantt-bar { position: absolute; top: 11px; height: 14px; border-radius: 4px; opacity: .85; min-width: 4px; }
+.gantt-bar.overdue, .gantt-milestone.overdue { outline: 2px solid var(--danger); outline-offset: 1px; }
+.gantt-bar.blocked { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.45) 0 4px, transparent 4px 8px) !important; }
+.gantt-milestone { position: absolute; top: 12px; width: 12px; height: 12px; transform: rotate(45deg); border-radius: 2px; display: inline-block; }
+.gantt-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--danger); opacity: .5; }
+.gantt-prod { position: absolute; top: 6px; bottom: 6px; border-left: 2px solid var(--info); }
+@media (max-width: 720px) { .gantt-row { grid-template-columns: 160px 1fr; } }
