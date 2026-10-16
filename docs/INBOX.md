@@ -46,6 +46,8 @@ ID задачи Bitrix: 402775
 
 ## Подключение существующего Gmail
 
+Worker принимает `INBOX_INGEST_KEYS` как строковый секрет с JSON или как JSON-переменную Dashboard. Рекомендуется тип Secret, чтобы скрыть значение в панели. Значение должно быть объектом с ID подключения и строковым ключом длиной 32–256 символов. `keep_vars: true` сохраняет переменные Dashboard при деплое; значения ключей в Git не записываются.
+
 1. В аккаунте, куда уже приходят письма, создать проект Google Apps Script. Скопировать `integrations/gmail/Code.gs` и `appsscript.json`. Включить Advanced Gmail service (Gmail API v1).
 2. В Script Properties заполнить:
 

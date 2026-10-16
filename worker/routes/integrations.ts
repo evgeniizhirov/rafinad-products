@@ -30,9 +30,12 @@ export async function handleIntegration(req: Request, env: Env, path: string): P
   if (req.method!=='POST') throw new HttpError(405,'method_not_allowed','Метод не поддерживается');
   if (env.INBOX_INGEST_ENABLED!=='1') throw new HttpError(503,'ingest_disabled','Приём событий выключен');
   const id=req.headers.get('x-integration-id') ?? '';
-  const secret=parseJson<Record<string,string>>(env.INBOX_INGEST_KEYS, {})[id];
+  const keys:unknown=typeof env.INBOX_INGEST_KEYS==='string'
+    ? parseJson<unknown>(env.INBOX_INGEST_KEYS, {}) : env.INBOX_INGEST_KEYS;
+  const secret=keys && typeof keys==='object' && !Array.isArray(keys) && Object.hasOwn(keys,id)
+    ? (keys as Record<string,unknown>)[id] : undefined;
   const token=/^Bearer (\S+)$/.exec(req.headers.get('authorization') ?? '')?.[1];
-  if (!secret || secret.length<32 || !token || token.length>256) throw new HttpError(401,'invalid_integration_key','Нет доступа');
+  if (typeof secret!=='string' || secret.length<32 || secret.length>256 || !token || token.length>256) throw new HttpError(401,'invalid_integration_key','Нет доступа');
   const a=await sha256Hex(secret), b=await sha256Hex(token); let difference=0;
   for (let i=0;i<a.length;i++) difference|=a.charCodeAt(i)^b.charCodeAt(i);
   if (difference) throw new HttpError(401,'invalid_integration_key','Нет доступа');

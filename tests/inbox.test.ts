@@ -32,6 +32,21 @@ async function deliver(app:TestApp,e:unknown,id='delivery-1',sourceId?:string){
   const r=await app.call('POST','/api/integrations/events',{delivery_id:id,event:e,...(sourceId?{source_event_id:sourceId}:{})},undefined,headers);
   assert.ok([200,202].includes(r.status),JSON.stringify(r.body));return r.body;
 }
+test('Dashboard JSON binding and string secret both authenticate; malformed maps fail closed',async()=>{
+  const {app}=await harness();
+  for(const keys of [{mail:secret},JSON.stringify({mail:secret})]){
+    app.env.INBOX_INGEST_KEYS=keys;
+    assert.equal((await app.call('POST','/api/integrations/heartbeat',{found:0,sent:0,errors:0},undefined,headers)).status,200);
+  }
+  for(const keys of ['null','[]','false','invalid',{mail:123},{mail:{}},{mail:'short'},{mail:'x'.repeat(257)},Object.create({mail:secret})]){
+    app.env.INBOX_INGEST_KEYS=keys;
+    assert.equal((await app.call('POST','/api/integrations/heartbeat',{found:0,sent:0,errors:0},undefined,headers)).status,401);
+  }
+  app.env.INBOX_INGEST_KEYS={mail:secret};
+  const e=await deliver(app,event());await worker.scheduled({},app.env);
+  assert.equal(app.one('SELECT state FROM inbox_events WHERE id=?',e.event_id).state,'applied');
+  assert.ok(app.one('SELECT feature_id FROM inbox_items').feature_id);
+});
 for (const status of ['BLOCKED','POSTPONED','DONE','REOPENED']) test(`mail ${status}: scheduled handler creates one RF and keeps external and RF statuses separate`, async()=>{
   const {app}=await harness('bitrix_email','none');
   const created=await deliver(app,mail);

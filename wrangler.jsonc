@@ -25,6 +25,8 @@
   "observability": {
     "enabled": true
   },
+  // Preserve integration keys configured in Dashboard; never store them in Git.
+  "keep_vars": true,
   "vars": { "INBOX_INGEST_ENABLED": "1" },
   "triggers": { "crons": ["* * * * *"] }
   // Secrets (set with `wrangler secret put <NAME>`, never commit them):
