@@ -25,12 +25,19 @@ export function normalizeIncoming(raw: unknown, connection: {adapter:string;allo
   }
   for (const k of Object.keys(values)) if(k!=='source_task_type')values[k]=values[k].trim();
   if (values.external_task_id!==subject[2] || !values.title || !('description' in values) || !values.source_url) throw new Error('mail_fields');
-  // Some plain-text renderers wrap the URL. Whitespace is not part of a portal URL.
-  values.source_url=values.source_url.replace(/\s+/g,'');
-  const url=new URL(values.source_url);
-  if (url.protocol!=='https:' || url.hostname.toLowerCase()!==connection.source_instance_id.toLowerCase() || url.username || url.password) throw new Error('mail_portal');
-  const id=/\/tasks\/task\/view\/(\d+)\/?$/.exec(url.pathname)?.[1];
-  if (id!==subject[2]) throw new Error('mail_task_id');
+  // Gmail plain text can render an anchor as "label URL:\n target URL".
+  // Preserve wrapped URLs, but never join two URLs into one pathname or choose
+  // between differing targets: every occurrence must be the same validated link.
+  const parts=values.source_url.replace(/\s+/g,'').split(/(?=https?:\/\/)/i);
+  const urls=parts.map(part=>{
+    const url=new URL(parts.length>1?part.replace(/:$/,''):part);
+    if (url.protocol!=='https:' || url.hostname.toLowerCase()!==connection.source_instance_id.toLowerCase() || url.username || url.password) throw new Error('mail_portal');
+    const id=/\/tasks\/task\/view\/(\d+)\/?$/.exec(url.pathname)?.[1];
+    if (id!==subject[2]) throw new Error('mail_task_id');
+    return url.href;
+  });
+  if (new Set(urls).size!==1) throw new Error('ambiguous_source_url');
+  values.source_url=urls[0];
   const {external_task_id,...payload}=values;
   // These are source dates without a timezone, NOT evidence of update order.
   // "Rafinad", "N" and "user_4158" stay raw; no guessed type, urgency or user mapping.

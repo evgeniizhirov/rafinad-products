@@ -47,6 +47,21 @@ test('Dashboard JSON binding and string secret both authenticate; malformed maps
   assert.equal(app.one('SELECT state FROM inbox_events WHERE id=?',e.event_id).state,'applied');
   assert.ok(app.one('SELECT feature_id FROM inbox_items').feature_id);
 });
+test('Gmail duplicate URL persists a single clean RF link and redelivery remains idempotent',async()=>{
+  const {app}=await harness('bitrix_email','none');
+  const url='https://my.kokocgroup.ru/workgroups/group/2669/tasks/task/view/402775/';
+  const raw={...mail,text:mail.text.replace(url,url+':\r\n'+url)};
+  const e=await deliver(app,raw);await worker.scheduled({},app.env);
+  const item=app.one('SELECT * FROM inbox_items');
+  assert.equal(JSON.parse(item.snapshot).source_url,url);
+  assert.equal(app.one('SELECT url FROM feature_links WHERE feature_id=?',item.feature_id).url,url);
+  const stored=app.one('SELECT * FROM inbox_events WHERE id=?',e.event_id);
+  assert.equal(JSON.parse(stored.raw_payload).text,raw.text);
+  assert.equal(JSON.parse(stored.normalized_payload).payload.source_url,url);
+  assert.equal((await deliver(app,raw)).duplicate,true);await worker.scheduled({},app.env);
+  assert.equal(app.one('SELECT COUNT(*) n FROM external_rf_owners').n,1);
+  assert.equal(app.one('SELECT COUNT(*) n FROM feature_links WHERE feature_id=?',item.feature_id).n,1);
+});
 for (const status of ['BLOCKED','POSTPONED','DONE','REOPENED']) test(`mail ${status}: scheduled handler creates one RF and keeps external and RF statuses separate`, async()=>{
   const {app}=await harness('bitrix_email','none');
   const created=await deliver(app,mail);
@@ -85,6 +100,15 @@ async function acceptBody(app:TestApp,admin:string,item:any,mode='create',target
 }
 
 describe('Bitrix mail adapter and source ordering',()=>{
+  test('Gmail repeated anchor URL becomes one link; differing targets are rejected',()=>{
+    const url='https://my.kokocgroup.ru/workgroups/group/2669/tasks/task/view/402775/';
+    const duplicated={...mail,text:mail.text.replace(url,url+':\r\n'+url+'\r\n')};
+    assert.equal(normalizeIncoming(duplicated,connection).payload.source_url,url);
+    assert.equal(normalizeIncoming({...mail,text:mail.text.replace(url,url+':'+url)},connection).payload.source_url,url);
+    for(const other of [url.replace('402775','402776'),url.replace('my.kokocgroup.ru','evil.example'),url.replace('/2669/','/9999/'),'https://evil.example/']){
+      for(const pair of [url+':\n'+other,other+':\n'+url])assert.throws(()=>normalizeIncoming({...mail,text:mail.text.replace(url,pair)},connection));
+    }
+  });
   test('screen example preserves raw participants/type/priority/dates; never guesses source order',()=>{
     const e=normalizeIncoming(mail,connection);
     assert.equal(e.external_task_id,'402775');assert.equal(e.payload.title,'Тестовая');assert.equal(e.payload.description,'Проверка отправки триггера в статусе бэклог');
