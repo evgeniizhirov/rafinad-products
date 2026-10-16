@@ -4,6 +4,7 @@ import { normalizeIncoming } from '../worker/domain/bitrix-email';
 import { eventSchema, mergeSource } from '../worker/domain/inbox';
 import { processInbox } from '../worker/services/inbox-processor';
 import { setup, type TestApp } from './helpers';
+import worker from '../worker/index';
 
 const secret='test-integration-secret-with-at-least-32-characters';
 const headers={authorization:`Bearer ${secret}`,'x-integration-id':'mail'};
@@ -31,6 +32,29 @@ async function deliver(app:TestApp,e:unknown,id='delivery-1',sourceId?:string){
   const r=await app.call('POST','/api/integrations/events',{delivery_id:id,event:e,...(sourceId?{source_event_id:sourceId}:{})},undefined,headers);
   assert.ok([200,202].includes(r.status),JSON.stringify(r.body));return r.body;
 }
+for (const status of ['BLOCKED','POSTPONED','DONE','REOPENED']) test(`mail ${status}: scheduled handler creates one RF and keeps external and RF statuses separate`, async()=>{
+  const {app}=await harness('bitrix_email','none');
+  const created=await deliver(app,mail);
+  assert.equal(app.one('SELECT state FROM inbox_events WHERE id=?',created.event_id).state,'pending');
+  app.env.INBOX_INGEST_ENABLED='0';await worker.scheduled({},app.env);
+  assert.equal(app.one('SELECT COUNT(*) n FROM inbox_items').n,0);
+  app.env.INBOX_INGEST_ENABLED='1';await worker.scheduled({},app.env);
+  const item=app.one('SELECT * FROM inbox_items'),rf=app.one('SELECT * FROM features WHERE id=?',item.feature_id);
+  assert.equal(item.review_state,'accepted');assert.equal(rf.is_product_internal,1);
+  assert.equal(app.one('SELECT state FROM inbox_events WHERE id=?',created.event_id).state,'applied');
+  assert.equal((await deliver(app,mail)).duplicate,true);
+  const update=await deliver(app,{...mail,subject:mail.subject.replace('CREATE',status)},'status-'+status);
+  await worker.scheduled({},app.env);
+  assert.equal(app.one('SELECT state FROM inbox_events WHERE id=?',update.event_id).state,'applied');
+  assert.equal(JSON.parse(app.one('SELECT snapshot FROM inbox_items').snapshot).external_status,status);
+  assert.equal(app.one('SELECT status_id FROM features WHERE id=?',rf.id).status_id,rf.status_id);
+  assert.equal(app.one('SELECT COUNT(*) n FROM external_rf_owners').n,1);
+  assert.ok(app.one('SELECT last_processed_at FROM integration_connections').last_processed_at);
+  const changed=await deliver(app,{...mail,subject:mail.subject.replace('CREATE','UPDATE'),text:mail.text.replace('Название: Тестовая','Название: Изменённая')},'changed');
+  await worker.scheduled({},app.env);
+  assert.equal(app.one('SELECT error_code FROM inbox_events WHERE id=?',changed.event_id).error_code,'field_conflict');
+  assert.equal(app.one('SELECT title FROM features WHERE id=?',rf.id).title,rf.title);
+});
 // Legacy/manual exception fixture: existing undecided Inbox rows must retain the preview workflow.
 async function seeded(){
   const h=await harness();await deliver(h.app,event(undefined,{source_event_version:1}));await processInbox(h.app.env);
