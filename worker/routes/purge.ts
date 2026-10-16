@@ -156,6 +156,8 @@ async function featurePlan(db: D1Database, rec: Row): Promise<Plan> {
   effects.push({ label: 'Аналитика', count: 0, note: 'Задача пропадёт из аналитики: сроки, просрочки, переносы и выполнение плана пересчитаются без неё.' });
 
   const warnings: string[] = [];
+  const inboxCount = await first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM inbox_items WHERE feature_id IN (${IN})`, ...ids);
+  if (inboxCount?.n) effects.push({ label: 'Входящие обращения', count: inboxCount.n, note: 'Связь с RF удалится. Исходные письма и решения Product сохранятся во входящих; повторное создание автоматически не выполняется.' });
   if (release?.approved_at) warnings.push(`Задача входит в утверждённый ${release.name}: состав утверждённого плана изменится.`);
   if (isProductInternal(rec)) warnings.push('Это скрытая задача продукта.');
   return {

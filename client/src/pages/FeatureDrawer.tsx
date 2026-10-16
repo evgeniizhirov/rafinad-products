@@ -144,6 +144,7 @@ function About({ f }: { f: any }) {
         {f.closed_at && (<><dt>Завершена</dt><dd>{fmtDate(f.closed_at)}</dd></>)}
         {f.external_ref && (<><dt>Внешний ID</dt><dd>{f.external_ref}</dd></>)}
         {f.sources?.length > 0 && (<><dt>Источники импорта</dt><dd>{f.sources.map((s: any) => <div key={s.source_id + s.external_id}>{s.source_name}: {s.external_id}</div>)}</dd></>)}
+        {f.external_states?.length > 0 && (<><dt>Состояния источников</dt><dd>{f.external_states.map((s:any)=><div key={s.source+':'+s.external_task_id}>{s.source} · {s.external_task_id}: {s.status||'статус не передан'}{s.due_at&&<div>Срок в источнике: {s.due_at}</div>}</div>)}</dd></>)}
       </dl>
       <PhasePanel f={f} />
       {f.links !== undefined && <ExternalLinks f={f} canEdit={canEditCard} />}

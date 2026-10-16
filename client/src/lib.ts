@@ -147,7 +147,7 @@ export interface Me {
   role: 'admin' | 'product' | 'department_lead';
   department_ids: string[];
   must_change_password: boolean;
-  permissions: { edit_catalog: boolean; plan: boolean; import: boolean; admin: boolean; comment: boolean };
+  permissions: { edit_catalog: boolean; plan: boolean; import: boolean; admin: boolean; comment: boolean; inbox: boolean };
 }
 
 export interface Meta {

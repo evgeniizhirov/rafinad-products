@@ -146,6 +146,9 @@ export function registerMergeRoutes(r: Router) {
     st.push(stmt(db, 'INSERT OR IGNORE INTO feature_tags (feature_id, tag) SELECT ?, tag FROM feature_tags WHERE feature_id = ?', T, S));
     st.push(stmt(db, 'UPDATE comments SET feature_id = ?, moved_from = COALESCE(moved_from, ?) WHERE feature_id = ?', T, S, S));
     st.push(stmt(db, `UPDATE source_entity_links SET entity_id = ?, updated_at = ? WHERE entity_type = 'feature' AND entity_id = ?`, T, now, S));
+    st.push(stmt(db, 'UPDATE inbox_items SET feature_id=?,updated_at=?,version=version+1 WHERE feature_id=?', T, now, S));
+    // The target keeps its existing source authority; a merged secondary source cannot overwrite it.
+    st.push(stmt(db, 'DELETE FROM external_rf_owners WHERE feature_id=?', S));
     st.push(stmt(db, `UPDATE release_features SET feature_id = ? WHERE feature_id = ? AND NOT EXISTS (SELECT 1 FROM release_features WHERE feature_id = ?)`, T, S, T));
     st.push(stmt(db, 'DELETE FROM release_features WHERE feature_id = ?', S));
     // the source card stays (old links resolve to the target) and records the duplicate relation

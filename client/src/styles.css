@@ -564,3 +564,9 @@ table.data td.c, table.data th.c { text-align: center; }
 
 /* phases */
 table.data tr.current td { background: var(--beet-50, rgba(140, 30, 80, .05)); }
+/* Inbox: preserve long source text without executing HTML or breaking narrow layouts. */
+.inbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+.inbox-source { display: grid; gap: 14px; }
+.inbox-source dt { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.inbox-source dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.inbox-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; font: inherit; font-size: 13px; }

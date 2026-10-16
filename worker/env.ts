@@ -31,6 +31,9 @@ export interface Fetcher {
 }
 
 export interface Env {
+  /** Ingest and processing are opt-in. Secrets map connection IDs to independent machine tokens. */
+  INBOX_INGEST_ENABLED?: string;
+  INBOX_INGEST_KEYS?: string;
   DB: D1Database;
   ASSETS?: Fetcher;
   /** JSON key of a Google service account with read-only access to the spreadsheet. Secret. */

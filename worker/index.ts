@@ -1,4 +1,8 @@
 import type { Env } from './env';
+import { registerExternalTypeRoutes } from './routes/external-types';
+import { registerInboxRoutes } from './routes/inbox';
+import { handleIntegration, isIntegrationEndpoint } from './routes/integrations';
+import { processInbox } from './services/inbox-processor';
 import { loadApiKeyUser, loadSessionUser, scopeFor } from './lib/auth';
 import { errorResponse, forbidden, HttpError, json, Router, type Ctx } from './lib/http';
 import { registerAdminRoutes } from './routes/admin';
@@ -24,6 +28,8 @@ import { registerPriorityRoutes } from './routes/priorities';
 import { registerReleaseRoutes } from './routes/releases';
 
 export const router = new Router();
+registerExternalTypeRoutes(router);
+registerInboxRoutes(router);
 registerAuthRoutes(router);
 registerDashboardRoutes(router);
 registerFeatureRoutes(router);
@@ -72,6 +78,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       const origin = req.headers.get('origin');
       if (origin && origin !== url.origin) throw forbidden('Запрос с другого сайта отклонён');
     }
+    if (isIntegrationEndpoint(url.pathname)) return withHeaders(await handleIntegration(req, env, url.pathname));
     const m = router.match(req.method, url.pathname);
     if (m === null) throw new HttpError(404, 'not_found', 'Неизвестный адрес API');
     if (m === 'method') throw new HttpError(405, 'method_not_allowed', 'Метод не поддерживается');
@@ -97,6 +104,9 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
 }
 
 export default {
+  async scheduled(_controller: unknown, env: Env): Promise<void> {
+    await processInbox(env);
+  },
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname.startsWith('/api/')) return handleApi(req, env, url);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canAccessInbox } from '../lib/inbox-access';
 import {
   checkLoginLock, clearLoginFailures, clientIp, perms, registerLoginFailure, sessionCookie, SESSION_TTL_MS,
 } from '../lib/auth';
@@ -20,13 +21,14 @@ async function createSession(ctx: Ctx, userId: string) {
   ctx.setCookies.push(sessionCookie(ctx.env, token, Math.floor(SESSION_TTL_MS / 1000)));
 }
 
-export function meDto(ctx: Ctx) {
+export async function meDto(ctx: Ctx) {
   const u = ctx.user;
   if (!u) return { user: null };
   return {
     user: {
       id: u.id, email: u.email, name: u.name, role: u.role, department_ids: u.departmentIds, must_change_password: u.mustChangePassword,
       permissions: {
+        inbox: await canAccessInbox(ctx),
         edit_catalog: perms.editCatalog(u), plan: perms.plan(u), import: perms.import(u), admin: perms.admin(u), comment: perms.comment(u),
       },
       ...(u.apiKey ? { api_key: { id: u.apiKey.id, scopes: u.apiKey.scopes } } : {}),
@@ -35,7 +37,7 @@ export function meDto(ctx: Ctx) {
 }
 
 export function registerAuthRoutes(r: Router) {
-  r.get('/api/auth/me', (ctx) => json(meDto(ctx)));
+  r.get('/api/auth/me', async (ctx) => json(await meDto(ctx)));
 
   r.post('/api/auth/login', async (ctx) => {
     const body = await readJson(ctx, z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(1).max(200) }));

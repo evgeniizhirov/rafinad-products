@@ -17,6 +17,8 @@ import { Analytics } from './pages/Analytics';
 import { ProposalDetail, Proposals } from './pages/Proposals';
 import { Budget } from './pages/Budget';
 import { Sync } from './pages/Sync';
+import { Inbox } from './pages/Inbox';
+import { InternalTasks } from './pages/InternalTasks';
 import { Avatar, Empty, Loading, Toasts } from './ui';
 import './styles.css';
 
@@ -59,6 +61,8 @@ function Sidebar({ me, open, onNavigate }: { me: Me | null; open: boolean; onNav
         ))}
         {me && (me.permissions.import || me.permissions.admin) && <div className="nav-group">Управление</div>}
         {me?.permissions.import && <Link to="/sync" className={active('/sync') ? 'active' : ''} onClick={onNavigate}><I.sync />Синхронизация</Link>}
+        {me?.permissions.inbox && <Link to="/inbox" className={active('/inbox') ? 'active' : ''} onClick={onNavigate}><I.backlog />Входящие задачи</Link>}
+        {me?.permissions.edit_catalog && <Link to="/internal-tasks" className={active('/internal-tasks') ? 'active' : ''} onClick={onNavigate}><I.backlog />Внутренние задачи</Link>}
         {me?.permissions.admin && <Link to="/admin" className={active('/admin') ? 'active' : ''} onClick={onNavigate}><I.admin />Администрирование</Link>}
       </div>
       <div className="sidebar-foot">
@@ -108,6 +112,8 @@ function Routes() {
     case 'analytics': return <Analytics />;
     case 'proposals': return seg[1] ? <ProposalDetail id={seg[1]} /> : <Proposals />;
     case 'sync': return <Sync />;
+    case 'inbox': return <Inbox />;
+    case 'internal-tasks': return <InternalTasks />;
     case 'admin': return <Admin />;
     case 'account': return <Account />;
     default: return <Empty title="Страница не найдена"><a href="/" style={{ color: 'var(--beet)' }}>На обзор</a></Empty>;

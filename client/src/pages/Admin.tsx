@@ -1,11 +1,12 @@
 import { AdminApiKeys } from './ApiKeys';
+import { ExternalTypes } from './ExternalTypes';
 import { TeamRates } from './TeamRates';
 import { useState } from 'react';
 import { I } from '../icons';
 import { api, fmtDate, fmtDateTime, invalidate, mutate, ROLE_LABEL, toast, useApi, useApp, useQueryParam } from '../lib';
 import { Empty, ErrorBox, Field, Loading, Modal, PageHead, StatusPill, Tabs, useDirty } from '../ui';
 
-type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'settings' | 'audit' | 'apikeys' | 'rates';
+type Tab = 'users' | 'departments' | 'teams' | 'categories' | 'statuses' | 'stages' | 'settings' | 'audit' | 'apikeys' | 'rates' | 'external-types';
 
 export function Admin() {
   const { me } = useApp();
@@ -29,6 +30,7 @@ export function Admin() {
           { id: 'settings', label: 'Публикация' },
           { id: 'apikeys', label: 'API-ключи' },
           { id: 'rates', label: 'Ставки команд' },
+          { id: 'external-types', label: 'Типы внешних задач' },
           { id: 'audit', label: 'Журнал' },
         ]}
       />
@@ -37,7 +39,8 @@ export function Admin() {
       {tab === 'audit' && <Audit />}
       {tab === 'apikeys' && <AdminApiKeys />}
       {tab === 'rates' && <TeamRates />}
-      {!['users', 'settings', 'audit'].includes(tab) && <Dictionary kind={tab as DictKind} />}
+      {tab === 'external-types' && <ExternalTypes />}
+      {!['users', 'settings', 'audit', 'apikeys', 'rates', 'external-types'].includes(tab) && <Dictionary kind={tab as DictKind} />}
     </>
   );
 }

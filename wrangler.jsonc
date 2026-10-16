@@ -24,7 +24,10 @@
   ],
   "observability": {
     "enabled": true
-  }
+  },
+  "vars": { "INBOX_INGEST_ENABLED": "0" },
+  "triggers": { "crons": ["* * * * *"] }
   // Secrets (set with `wrangler secret put <NAME>`, never commit them):
   //   GOOGLE_SERVICE_ACCOUNT_JSON — JSON key of a read-only Google service account
+  //   INBOX_INGEST_KEYS — JSON map of connection IDs to independent ingest secrets
 }

@@ -11,6 +11,7 @@ import { flatToCanonical, type FlatConfig } from './flatSheet';
 import { decodeLinks, emptyPlan, planHasChanges, planLinks, type ExistingLink, type LinkChoice } from './linkImport';
 import { findCycle, type Edge } from './graph';
 import { normalizeTitle, parseDate, parseHours, sanitizeCell, similarity } from './text';
+import { bitrixTaskKey } from './external-task';
 
 // «Офферы» removed in vNext (owner decision 13.10): an «Offers» sheet in an old template is ignored.
 export type SheetKey = 'epics' | 'features' | 'relations';
@@ -492,6 +493,24 @@ export function buildPreview(rawSheets: SheetsData, config: ImportConfig, snap: 
         target = resolveMerged(L.entities[entityType], link.entity_id);
         lastValues = link.last_values;
         if (target && target.id !== link.entity_id) matchNote = 'Карточка была объединена — обновится основная карточка';
+      }
+      // Inbox-created RF may have a completely different product title and no sheet external_ref.
+      // Offer verified portal URL matches for a human link decision, before title/business-ID matching.
+      if (!target && entityType === 'feature' && payload.links?.length) {
+        const keys = new Set<string>(payload.links.map((l: {url:string}) => bitrixTaskKey(l.url)).filter(Boolean));
+        const matches = new Map<string, SnapshotEntity>();
+        for (const l of snap.featureLinks ?? []) {
+          const key = bitrixTaskKey(l.url);
+          if (!key || !keys.has(key)) continue;
+          const f = resolveMerged(L.entities.feature, l.feature_id);
+          if (f) matches.set(f.id, f);
+        }
+        if (matches.size) {
+          const it = push({ ...base, action:'duplicate', resolution:null,
+            candidates:[...matches.values()].map(f => ({id:f.id,label:entityLabel('feature',f),score:1,reason:'Та же задача Bitrix (портал и ID)'})) });
+          inRun[entityType].set(lc(externalId),it);
+          continue;
+        }
       }
       // 2. exact business identifier
       if (!target) {

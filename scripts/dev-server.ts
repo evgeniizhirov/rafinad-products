@@ -48,7 +48,9 @@ const assets: Fetcher = {
   },
 };
 
-const env: Env = { DB: db, ASSETS: assets, COOKIE_SECURE: '0', GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON };
+const env: Env = { DB: db, ASSETS: assets, COOKIE_SECURE: '0', GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+  INBOX_INGEST_ENABLED: process.env.INBOX_INGEST_ENABLED, INBOX_INGEST_KEYS: process.env.INBOX_INGEST_KEYS };
+if (env.INBOX_INGEST_ENABLED === '1') setInterval(() => worker.scheduled({},env).catch(() => console.error('Inbox processing failed')), 60_000).unref();
 
 createServer(async (req, res) => {
   try {
